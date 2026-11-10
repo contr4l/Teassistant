@@ -1,0 +1,104 @@
+{
+  "$defs": {
+    "Quota": {
+      "additionalProperties": false,
+      "properties": {
+        "point_id": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Point Id",
+          "type": "string"
+        },
+        "count": {
+          "default": 10,
+          "maximum": 100,
+          "minimum": 0,
+          "title": "Count",
+          "type": "integer"
+        },
+        "by_difficulty": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "propertyNames": {
+                "enum": [
+                  "basic",
+                  "intermediate",
+                  "advanced"
+                ]
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "By Difficulty"
+        },
+        "reference_score": {
+          "default": 50,
+          "maximum": 100,
+          "minimum": 0,
+          "title": "Reference Score",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "point_id"
+      ],
+      "title": "Quota",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "quotas": {
+      "items": {
+        "$ref": "#/$defs/Quota"
+      },
+      "maxItems": 100,
+      "minItems": 1,
+      "title": "Quotas",
+      "type": "array"
+    },
+    "excluded_question_ids": {
+      "items": {
+        "maxLength": 200,
+        "minLength": 1,
+        "type": "string"
+      },
+      "title": "Excluded Question Ids",
+      "type": "array"
+    },
+    "excluded_canonical_ids": {
+      "items": {
+        "maxLength": 200,
+        "minLength": 1,
+        "type": "string"
+      },
+      "title": "Excluded Canonical Ids",
+      "type": "array"
+    },
+    "seed": {
+      "default": 0,
+      "title": "Seed",
+      "type": "integer"
+    },
+    "difficulty_version": {
+      "default": "p0-draft-v1",
+      "maxLength": 200,
+      "minLength": 1,
+      "title": "Difficulty Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "quotas"
+  ],
+  "title": "PracticeRequest",
+  "type": "object"
+}

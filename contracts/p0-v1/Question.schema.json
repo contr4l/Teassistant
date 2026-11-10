@@ -1,0 +1,267 @@
+{
+  "$defs": {
+    "ContentNode": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "enum": [
+            "text",
+            "formula",
+            "image"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "text": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Text"
+        },
+        "latex": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Latex"
+        },
+        "asset_path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Asset Path"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "title": "ContentNode",
+      "type": "object"
+    },
+    "SourceRegion": {
+      "additionalProperties": false,
+      "properties": {
+        "asset_id": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Asset Id",
+          "type": "string"
+        },
+        "page": {
+          "minimum": 1,
+          "title": "Page",
+          "type": "integer"
+        },
+        "bbox": {
+          "maxItems": 4,
+          "minItems": 4,
+          "prefixItems": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "title": "Bbox",
+          "type": "array"
+        }
+      },
+      "required": [
+        "asset_id",
+        "page",
+        "bbox"
+      ],
+      "title": "SourceRegion",
+      "type": "object"
+    },
+    "Subquestion": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "stem": {
+          "items": {
+            "$ref": "#/$defs/ContentNode"
+          },
+          "minItems": 1,
+          "title": "Stem",
+          "type": "array"
+        },
+        "answer": {
+          "items": {
+            "$ref": "#/$defs/ContentNode"
+          },
+          "minItems": 1,
+          "title": "Answer",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "stem",
+        "answer"
+      ],
+      "title": "Subquestion",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "maxLength": 200,
+      "minLength": 1,
+      "title": "Id",
+      "type": "string"
+    },
+    "revision": {
+      "default": "1",
+      "maxLength": 200,
+      "minLength": 1,
+      "title": "Revision",
+      "type": "string"
+    },
+    "canonical_id": {
+      "maxLength": 200,
+      "minLength": 1,
+      "title": "Canonical Id",
+      "type": "string"
+    },
+    "content_fingerprint": {
+      "maxLength": 200,
+      "minLength": 1,
+      "title": "Content Fingerprint",
+      "type": "string"
+    },
+    "curriculum_version": {
+      "maxLength": 200,
+      "minLength": 1,
+      "title": "Curriculum Version",
+      "type": "string"
+    },
+    "stem": {
+      "items": {
+        "$ref": "#/$defs/ContentNode"
+      },
+      "minItems": 1,
+      "title": "Stem",
+      "type": "array"
+    },
+    "answer": {
+      "items": {
+        "$ref": "#/$defs/ContentNode"
+      },
+      "title": "Answer",
+      "type": "array"
+    },
+    "solution": {
+      "items": {
+        "$ref": "#/$defs/ContentNode"
+      },
+      "title": "Solution",
+      "type": "array"
+    },
+    "subquestions": {
+      "items": {
+        "$ref": "#/$defs/Subquestion"
+      },
+      "title": "Subquestions",
+      "type": "array"
+    },
+    "point_ids": {
+      "items": {
+        "maxLength": 200,
+        "minLength": 1,
+        "type": "string"
+      },
+      "minItems": 1,
+      "title": "Point Ids",
+      "type": "array"
+    },
+    "prerequisite_ids": {
+      "items": {
+        "maxLength": 200,
+        "minLength": 1,
+        "type": "string"
+      },
+      "title": "Prerequisite Ids",
+      "type": "array"
+    },
+    "difficulty_score": {
+      "maximum": 100,
+      "minimum": 0,
+      "title": "Difficulty Score",
+      "type": "integer"
+    },
+    "difficulty_version": {
+      "default": "p0-draft-v1",
+      "maxLength": 200,
+      "minLength": 1,
+      "title": "Difficulty Version",
+      "type": "string"
+    },
+    "model_version": {
+      "default": "synthetic",
+      "maxLength": 200,
+      "minLength": 1,
+      "title": "Model Version",
+      "type": "string"
+    },
+    "status": {
+      "default": "ready",
+      "enum": [
+        "ready",
+        "processing_failed"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "sources": {
+      "items": {
+        "$ref": "#/$defs/SourceRegion"
+      },
+      "minItems": 1,
+      "title": "Sources",
+      "type": "array"
+    }
+  },
+  "required": [
+    "id",
+    "canonical_id",
+    "content_fingerprint",
+    "curriculum_version",
+    "stem",
+    "point_ids",
+    "difficulty_score",
+    "sources"
+  ],
+  "title": "Question",
+  "type": "object"
+}

@@ -1,0 +1,11 @@
+{
+  "version": "synthetic-fractions-v1",
+  "is_synthetic": true,
+  "points": [
+    {
+      "id": "fractions",
+      "name": "分数运算",
+      "prerequisite_ids": []
+    }
+  ]
+}

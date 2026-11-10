@@ -1,0 +1,21 @@
+{
+  "runs": [
+    {
+      "sample_id": "synthetic-clean-001",
+      "parse_status": "parsed",
+      "items": [
+        {"question_id": "q1", "subquestion_id": "q1-a", "association_id": "a1", "adjudicated_complete": true},
+        {"question_id": "q2", "association_id": "a2", "adjudicated_complete": true}
+      ]
+    },
+    {
+      "sample_id": "synthetic-edge-002",
+      "parse_status": "parsed",
+      "items": [
+        {"question_id": "q3", "association_id": "a3", "association_status": "undetermined", "adjudicated_complete": false},
+        {"question_id": "q3"},
+        {"question_id": "extra-q", "association_id": "extra-a"}
+      ]
+    }
+  ]
+}

@@ -1,0 +1,40 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "student_id": {
+      "maxLength": 200,
+      "minLength": 1,
+      "title": "Student Id",
+      "type": "string"
+    },
+    "revision": {
+      "maxLength": 200,
+      "minLength": 1,
+      "title": "Revision",
+      "type": "string"
+    },
+    "curriculum_version": {
+      "maxLength": 200,
+      "minLength": 1,
+      "title": "Curriculum Version",
+      "type": "string"
+    },
+    "learned_point_ids": {
+      "items": {
+        "maxLength": 200,
+        "minLength": 1,
+        "type": "string"
+      },
+      "title": "Learned Point Ids",
+      "type": "array"
+    }
+  },
+  "required": [
+    "student_id",
+    "revision",
+    "curriculum_version",
+    "learned_point_ids"
+  ],
+  "title": "StudentProgress",
+  "type": "object"
+}

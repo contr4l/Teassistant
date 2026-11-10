@@ -1,0 +1,22 @@
+{
+  "version": "p0-eval-v1",
+  "samples": [
+    {
+      "id": "synthetic-clean-001",
+      "kind": "synthetic",
+      "submitted": true,
+      "expected_questions": [{"id": "q1"}, {"id": "q2"}],
+      "expected_associations": [
+        {"id": "a1", "question_id": "q1", "subquestion_id": "q1-a"},
+        {"id": "a2", "question_id": "q2", "subquestion_id": null}
+      ]
+    },
+    {
+      "id": "synthetic-edge-002",
+      "kind": "synthetic",
+      "submitted": true,
+      "expected_questions": [{"id": "q3"}],
+      "expected_associations": [{"id": "a3", "question_id": "q3", "subquestion_id": null}]
+    }
+  ]
+}

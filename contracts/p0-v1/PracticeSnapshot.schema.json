@@ -1,0 +1,500 @@
+{
+  "$defs": {
+    "ContentNode": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "enum": [
+            "text",
+            "formula",
+            "image"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "text": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Text"
+        },
+        "latex": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Latex"
+        },
+        "asset_path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Asset Path"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "title": "ContentNode",
+      "type": "object"
+    },
+    "PracticeItem": {
+      "additionalProperties": false,
+      "properties": {
+        "order": {
+          "minimum": 1,
+          "title": "Order",
+          "type": "integer"
+        },
+        "target_point_id": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Target Point Id",
+          "type": "string"
+        },
+        "question": {
+          "$ref": "#/$defs/Question"
+        }
+      },
+      "required": [
+        "order",
+        "target_point_id",
+        "question"
+      ],
+      "title": "PracticeItem",
+      "type": "object"
+    },
+    "PracticeRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "quotas": {
+          "items": {
+            "$ref": "#/$defs/Quota"
+          },
+          "maxItems": 100,
+          "minItems": 1,
+          "title": "Quotas",
+          "type": "array"
+        },
+        "excluded_question_ids": {
+          "items": {
+            "maxLength": 200,
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Excluded Question Ids",
+          "type": "array"
+        },
+        "excluded_canonical_ids": {
+          "items": {
+            "maxLength": 200,
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Excluded Canonical Ids",
+          "type": "array"
+        },
+        "seed": {
+          "default": 0,
+          "title": "Seed",
+          "type": "integer"
+        },
+        "difficulty_version": {
+          "default": "p0-draft-v1",
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Difficulty Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "quotas"
+      ],
+      "title": "PracticeRequest",
+      "type": "object"
+    },
+    "Question": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "revision": {
+          "default": "1",
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Revision",
+          "type": "string"
+        },
+        "canonical_id": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Canonical Id",
+          "type": "string"
+        },
+        "content_fingerprint": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Content Fingerprint",
+          "type": "string"
+        },
+        "curriculum_version": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Curriculum Version",
+          "type": "string"
+        },
+        "stem": {
+          "items": {
+            "$ref": "#/$defs/ContentNode"
+          },
+          "minItems": 1,
+          "title": "Stem",
+          "type": "array"
+        },
+        "answer": {
+          "items": {
+            "$ref": "#/$defs/ContentNode"
+          },
+          "title": "Answer",
+          "type": "array"
+        },
+        "solution": {
+          "items": {
+            "$ref": "#/$defs/ContentNode"
+          },
+          "title": "Solution",
+          "type": "array"
+        },
+        "subquestions": {
+          "items": {
+            "$ref": "#/$defs/Subquestion"
+          },
+          "title": "Subquestions",
+          "type": "array"
+        },
+        "point_ids": {
+          "items": {
+            "maxLength": 200,
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Point Ids",
+          "type": "array"
+        },
+        "prerequisite_ids": {
+          "items": {
+            "maxLength": 200,
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Prerequisite Ids",
+          "type": "array"
+        },
+        "difficulty_score": {
+          "maximum": 100,
+          "minimum": 0,
+          "title": "Difficulty Score",
+          "type": "integer"
+        },
+        "difficulty_version": {
+          "default": "p0-draft-v1",
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Difficulty Version",
+          "type": "string"
+        },
+        "model_version": {
+          "default": "synthetic",
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Model Version",
+          "type": "string"
+        },
+        "status": {
+          "default": "ready",
+          "enum": [
+            "ready",
+            "processing_failed"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "sources": {
+          "items": {
+            "$ref": "#/$defs/SourceRegion"
+          },
+          "minItems": 1,
+          "title": "Sources",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "canonical_id",
+        "content_fingerprint",
+        "curriculum_version",
+        "stem",
+        "point_ids",
+        "difficulty_score",
+        "sources"
+      ],
+      "title": "Question",
+      "type": "object"
+    },
+    "Quota": {
+      "additionalProperties": false,
+      "properties": {
+        "point_id": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Point Id",
+          "type": "string"
+        },
+        "count": {
+          "default": 10,
+          "maximum": 100,
+          "minimum": 0,
+          "title": "Count",
+          "type": "integer"
+        },
+        "by_difficulty": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "propertyNames": {
+                "enum": [
+                  "basic",
+                  "intermediate",
+                  "advanced"
+                ]
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "By Difficulty"
+        },
+        "reference_score": {
+          "default": 50,
+          "maximum": 100,
+          "minimum": 0,
+          "title": "Reference Score",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "point_id"
+      ],
+      "title": "Quota",
+      "type": "object"
+    },
+    "Shortfall": {
+      "additionalProperties": false,
+      "properties": {
+        "point_id": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Point Id",
+          "type": "string"
+        },
+        "difficulty": {
+          "anyOf": [
+            {
+              "enum": [
+                "basic",
+                "intermediate",
+                "advanced"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Difficulty"
+        },
+        "requested": {
+          "minimum": 0,
+          "title": "Requested",
+          "type": "integer"
+        },
+        "selected": {
+          "minimum": 0,
+          "title": "Selected",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "point_id",
+        "requested",
+        "selected"
+      ],
+      "title": "Shortfall",
+      "type": "object"
+    },
+    "SourceRegion": {
+      "additionalProperties": false,
+      "properties": {
+        "asset_id": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Asset Id",
+          "type": "string"
+        },
+        "page": {
+          "minimum": 1,
+          "title": "Page",
+          "type": "integer"
+        },
+        "bbox": {
+          "maxItems": 4,
+          "minItems": 4,
+          "prefixItems": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "title": "Bbox",
+          "type": "array"
+        }
+      },
+      "required": [
+        "asset_id",
+        "page",
+        "bbox"
+      ],
+      "title": "SourceRegion",
+      "type": "object"
+    },
+    "Subquestion": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "stem": {
+          "items": {
+            "$ref": "#/$defs/ContentNode"
+          },
+          "minItems": 1,
+          "title": "Stem",
+          "type": "array"
+        },
+        "answer": {
+          "items": {
+            "$ref": "#/$defs/ContentNode"
+          },
+          "minItems": 1,
+          "title": "Answer",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "stem",
+        "answer"
+      ],
+      "title": "Subquestion",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "p0-v1",
+      "default": "p0-v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "is_synthetic": {
+      "default": true,
+      "title": "Is Synthetic",
+      "type": "boolean"
+    },
+    "student_id": {
+      "maxLength": 200,
+      "minLength": 1,
+      "title": "Student Id",
+      "type": "string"
+    },
+    "progress_revision": {
+      "maxLength": 200,
+      "minLength": 1,
+      "title": "Progress Revision",
+      "type": "string"
+    },
+    "curriculum_version": {
+      "maxLength": 200,
+      "minLength": 1,
+      "title": "Curriculum Version",
+      "type": "string"
+    },
+    "request": {
+      "$ref": "#/$defs/PracticeRequest"
+    },
+    "items": {
+      "items": {
+        "$ref": "#/$defs/PracticeItem"
+      },
+      "title": "Items",
+      "type": "array"
+    },
+    "shortfalls": {
+      "items": {
+        "$ref": "#/$defs/Shortfall"
+      },
+      "title": "Shortfalls",
+      "type": "array"
+    }
+  },
+  "required": [
+    "student_id",
+    "progress_revision",
+    "curriculum_version",
+    "request",
+    "items"
+  ],
+  "title": "PracticeSnapshot",
+  "type": "object"
+}

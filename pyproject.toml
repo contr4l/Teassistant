@@ -1,0 +1,31 @@
+[project]
+name = "teassistant"
+version = "0.1.0"
+description = "初中数学智能备课 P0 验证工具"
+requires-python = ">=3.12,<3.14"
+dependencies = [
+  "pydantic>=2.10,<3",
+  "httpx>=0.28,<1",
+  "networkx>=3.4,<4",
+  "python-docx>=1.1,<2",
+  "Pillow>=11,<13",
+]
+
+[dependency-groups]
+dev = ["pytest>=8.3,<10", "pytest-asyncio>=0.25,<2", "ruff>=0.9,<1"]
+export = ["pypandoc-binary>=1.17,<2"]
+
+[tool.pytest.ini_options]
+pythonpath = ["backend"]
+testpaths = ["backend/tests"]
+asyncio_default_fixture_loop_scope = "function"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I"]
+
+[tool.uv]
+package = false
