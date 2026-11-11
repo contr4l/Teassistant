@@ -1,0 +1,673 @@
+{
+  "version": "junior-math-2022-draft-v1",
+  "is_synthetic": false,
+  "points": [
+    {
+      "id": "JM.NA.RATIONAL_CONCEPT",
+      "name": "有理数、数轴、相反数与绝对值",
+      "prerequisite_ids": []
+    },
+    {
+      "id": "JM.NA.RATIONAL_CALC",
+      "name": "有理数运算",
+      "prerequisite_ids": [
+        "JM.NA.RATIONAL_CONCEPT"
+      ]
+    },
+    {
+      "id": "JM.NA.POWER",
+      "name": "乘方与科学记数法",
+      "prerequisite_ids": [
+        "JM.NA.RATIONAL_CALC"
+      ]
+    },
+    {
+      "id": "JM.NA.SQUARE_ROOT",
+      "name": "平方根与立方根",
+      "prerequisite_ids": [
+        "JM.NA.POWER"
+      ]
+    },
+    {
+      "id": "JM.NA.REAL_NUMBER",
+      "name": "实数的性质与运算",
+      "prerequisite_ids": [
+        "JM.NA.SQUARE_ROOT"
+      ]
+    },
+    {
+      "id": "JM.NA.ALGEBRA_EXPR",
+      "name": "代数式与求值",
+      "prerequisite_ids": [
+        "JM.NA.RATIONAL_CALC"
+      ]
+    },
+    {
+      "id": "JM.NA.POLYNOMIAL_ADD",
+      "name": "整式加减",
+      "prerequisite_ids": [
+        "JM.NA.ALGEBRA_EXPR"
+      ]
+    },
+    {
+      "id": "JM.NA.POLYNOMIAL_MUL",
+      "name": "整式乘除与幂的运算",
+      "prerequisite_ids": [
+        "JM.NA.POWER",
+        "JM.NA.POLYNOMIAL_ADD"
+      ]
+    },
+    {
+      "id": "JM.NA.MUL_IDENTITIES",
+      "name": "乘法公式",
+      "prerequisite_ids": [
+        "JM.NA.POLYNOMIAL_MUL"
+      ]
+    },
+    {
+      "id": "JM.NA.FACTORIZATION",
+      "name": "因式分解",
+      "prerequisite_ids": [
+        "JM.NA.POLYNOMIAL_MUL"
+      ]
+    },
+    {
+      "id": "JM.NA.FRACTION_CONCEPT",
+      "name": "分式的意义与性质",
+      "prerequisite_ids": [
+        "JM.NA.ALGEBRA_EXPR"
+      ]
+    },
+    {
+      "id": "JM.NA.FRACTION_CALC",
+      "name": "分式运算",
+      "prerequisite_ids": [
+        "JM.NA.FRACTION_CONCEPT",
+        "JM.NA.FACTORIZATION"
+      ]
+    },
+    {
+      "id": "JM.NA.RADICAL_CALC",
+      "name": "二次根式的性质与运算",
+      "prerequisite_ids": [
+        "JM.NA.REAL_NUMBER",
+        "JM.NA.POLYNOMIAL_MUL"
+      ]
+    },
+    {
+      "id": "JM.EQ.LINEAR",
+      "name": "一元一次方程及解法",
+      "prerequisite_ids": [
+        "JM.NA.POLYNOMIAL_ADD"
+      ]
+    },
+    {
+      "id": "JM.EQ.LINEAR_APPLY",
+      "name": "一元一次方程应用",
+      "prerequisite_ids": [
+        "JM.EQ.LINEAR"
+      ]
+    },
+    {
+      "id": "JM.EQ.LINEAR_SYSTEM",
+      "name": "二元一次方程组及解法",
+      "prerequisite_ids": [
+        "JM.EQ.LINEAR"
+      ]
+    },
+    {
+      "id": "JM.EQ.SYSTEM_APPLY",
+      "name": "方程组应用",
+      "prerequisite_ids": [
+        "JM.EQ.LINEAR_SYSTEM"
+      ]
+    },
+    {
+      "id": "JM.EQ.FRACTION",
+      "name": "分式方程及增根检验",
+      "prerequisite_ids": [
+        "JM.NA.FRACTION_CALC",
+        "JM.EQ.LINEAR"
+      ]
+    },
+    {
+      "id": "JM.EQ.FRACTION_APPLY",
+      "name": "分式方程应用",
+      "prerequisite_ids": [
+        "JM.EQ.FRACTION"
+      ]
+    },
+    {
+      "id": "JM.EQ.QUADRATIC_CONCEPT",
+      "name": "一元二次方程的定义与解的意义",
+      "prerequisite_ids": [
+        "JM.NA.POLYNOMIAL_ADD"
+      ]
+    },
+    {
+      "id": "JM.EQ.QUADRATIC_SOLVE",
+      "name": "一元二次方程解法",
+      "prerequisite_ids": [
+        "JM.EQ.QUADRATIC_CONCEPT",
+        "JM.NA.FACTORIZATION",
+        "JM.NA.SQUARE_ROOT"
+      ]
+    },
+    {
+      "id": "JM.EQ.DISCRIMINANT",
+      "name": "一元二次方程根的判别式",
+      "prerequisite_ids": [
+        "JM.EQ.QUADRATIC_CONCEPT",
+        "JM.NA.REAL_NUMBER"
+      ]
+    },
+    {
+      "id": "JM.EQ.VIETA",
+      "name": "一元二次方程根与系数的关系",
+      "prerequisite_ids": [
+        "JM.EQ.QUADRATIC_CONCEPT",
+        "JM.NA.POLYNOMIAL_MUL"
+      ]
+    },
+    {
+      "id": "JM.EQ.QUADRATIC_APPLY",
+      "name": "一元二次方程应用",
+      "prerequisite_ids": [
+        "JM.EQ.QUADRATIC_SOLVE"
+      ]
+    },
+    {
+      "id": "JM.IN.INEQUALITY",
+      "name": "不等式的性质与解法",
+      "prerequisite_ids": [
+        "JM.EQ.LINEAR"
+      ]
+    },
+    {
+      "id": "JM.IN.SYSTEM",
+      "name": "一元一次不等式组",
+      "prerequisite_ids": [
+        "JM.IN.INEQUALITY"
+      ]
+    },
+    {
+      "id": "JM.IN.APPLY",
+      "name": "不等式与不等式组应用",
+      "prerequisite_ids": [
+        "JM.IN.INEQUALITY"
+      ]
+    },
+    {
+      "id": "JM.FN.COORDINATE",
+      "name": "平面直角坐标系与点的坐标",
+      "prerequisite_ids": [
+        "JM.NA.RATIONAL_CONCEPT"
+      ]
+    },
+    {
+      "id": "JM.FN.CONCEPT",
+      "name": "函数概念、自变量范围与图象",
+      "prerequisite_ids": [
+        "JM.NA.ALGEBRA_EXPR",
+        "JM.FN.COORDINATE"
+      ]
+    },
+    {
+      "id": "JM.FN.LINEAR_FORMULA",
+      "name": "一次函数的表达式与待定系数法",
+      "prerequisite_ids": [
+        "JM.FN.CONCEPT",
+        "JM.EQ.LINEAR_SYSTEM"
+      ]
+    },
+    {
+      "id": "JM.FN.LINEAR_PROPERTY",
+      "name": "一次函数图象与性质",
+      "prerequisite_ids": [
+        "JM.FN.CONCEPT"
+      ]
+    },
+    {
+      "id": "JM.FN.LINEAR_RELATION",
+      "name": "一次函数与方程、不等式",
+      "prerequisite_ids": [
+        "JM.FN.LINEAR_PROPERTY",
+        "JM.EQ.LINEAR",
+        "JM.IN.INEQUALITY"
+      ]
+    },
+    {
+      "id": "JM.FN.LINEAR_APPLY",
+      "name": "一次函数实际应用",
+      "prerequisite_ids": [
+        "JM.FN.LINEAR_FORMULA",
+        "JM.FN.LINEAR_PROPERTY"
+      ]
+    },
+    {
+      "id": "JM.FN.INVERSE_FORMULA",
+      "name": "反比例函数表达式",
+      "prerequisite_ids": [
+        "JM.FN.CONCEPT",
+        "JM.NA.FRACTION_CONCEPT"
+      ]
+    },
+    {
+      "id": "JM.FN.INVERSE_PROPERTY",
+      "name": "反比例函数图象与性质",
+      "prerequisite_ids": [
+        "JM.FN.INVERSE_FORMULA"
+      ]
+    },
+    {
+      "id": "JM.FN.INVERSE_AREA",
+      "name": "反比例函数比例系数与几何面积",
+      "prerequisite_ids": [
+        "JM.FN.INVERSE_PROPERTY",
+        "JM.GE.AREA"
+      ]
+    },
+    {
+      "id": "JM.FN.INVERSE_APPLY",
+      "name": "反比例函数应用与综合",
+      "prerequisite_ids": [
+        "JM.FN.INVERSE_PROPERTY",
+        "JM.FN.INVERSE_FORMULA"
+      ]
+    },
+    {
+      "id": "JM.FN.QUADRATIC_FORMULA",
+      "name": "二次函数表达式与待定系数法",
+      "prerequisite_ids": [
+        "JM.FN.CONCEPT",
+        "JM.EQ.LINEAR_SYSTEM"
+      ]
+    },
+    {
+      "id": "JM.FN.QUADRATIC_PROPERTY",
+      "name": "二次函数图象、顶点与对称轴",
+      "prerequisite_ids": [
+        "JM.FN.CONCEPT",
+        "JM.NA.MUL_IDENTITIES"
+      ]
+    },
+    {
+      "id": "JM.FN.QUADRATIC_COEFFICIENT",
+      "name": "二次函数系数与图象关系",
+      "prerequisite_ids": [
+        "JM.FN.QUADRATIC_PROPERTY"
+      ]
+    },
+    {
+      "id": "JM.FN.QUADRATIC_TRANSFORM",
+      "name": "抛物线的平移与表达式变化",
+      "prerequisite_ids": [
+        "JM.FN.QUADRATIC_PROPERTY"
+      ]
+    },
+    {
+      "id": "JM.FN.QUADRATIC_EXTREME",
+      "name": "二次函数最值与取值范围",
+      "prerequisite_ids": [
+        "JM.FN.QUADRATIC_PROPERTY"
+      ]
+    },
+    {
+      "id": "JM.FN.QUADRATIC_EQUATION",
+      "name": "二次函数与方程、不等式",
+      "prerequisite_ids": [
+        "JM.FN.QUADRATIC_PROPERTY",
+        "JM.EQ.QUADRATIC_SOLVE"
+      ]
+    },
+    {
+      "id": "JM.FN.QUADRATIC_APPLY",
+      "name": "二次函数实际应用与最优化",
+      "prerequisite_ids": [
+        "JM.FN.QUADRATIC_FORMULA",
+        "JM.FN.QUADRATIC_EXTREME"
+      ]
+    },
+    {
+      "id": "JM.FN.QUADRATIC_GEOMETRY",
+      "name": "二次函数与坐标几何综合",
+      "prerequisite_ids": [
+        "JM.FN.QUADRATIC_FORMULA",
+        "JM.FN.QUADRATIC_PROPERTY",
+        "JM.FN.COORDINATE"
+      ]
+    },
+    {
+      "id": "JM.GE.SEGMENT_ANGLE",
+      "name": "线段、角及其度量",
+      "prerequisite_ids": []
+    },
+    {
+      "id": "JM.GE.INTERSECT_PARALLEL",
+      "name": "相交线与平行线",
+      "prerequisite_ids": [
+        "JM.GE.SEGMENT_ANGLE"
+      ]
+    },
+    {
+      "id": "JM.GE.TRIANGLE_BASIC",
+      "name": "三角形边角关系",
+      "prerequisite_ids": [
+        "JM.GE.INTERSECT_PARALLEL"
+      ]
+    },
+    {
+      "id": "JM.GE.AREA",
+      "name": "平面图形面积与面积关系",
+      "prerequisite_ids": [
+        "JM.NA.RATIONAL_CALC"
+      ]
+    },
+    {
+      "id": "JM.GE.POLYGON",
+      "name": "多边形内外角",
+      "prerequisite_ids": [
+        "JM.GE.TRIANGLE_BASIC"
+      ]
+    },
+    {
+      "id": "JM.GE.CONGRUENCE",
+      "name": "全等三角形判定与性质",
+      "prerequisite_ids": [
+        "JM.GE.TRIANGLE_BASIC"
+      ]
+    },
+    {
+      "id": "JM.GE.ISOSCELES",
+      "name": "等腰与等边三角形",
+      "prerequisite_ids": [
+        "JM.GE.CONGRUENCE"
+      ]
+    },
+    {
+      "id": "JM.GE.RIGHT_TRIANGLE",
+      "name": "直角三角形性质",
+      "prerequisite_ids": [
+        "JM.GE.TRIANGLE_BASIC"
+      ]
+    },
+    {
+      "id": "JM.GE.PYTHAGORAS",
+      "name": "勾股定理及逆定理",
+      "prerequisite_ids": [
+        "JM.GE.RIGHT_TRIANGLE",
+        "JM.NA.SQUARE_ROOT"
+      ]
+    },
+    {
+      "id": "JM.GE.PARALLELOGRAM",
+      "name": "平行四边形判定与性质",
+      "prerequisite_ids": [
+        "JM.GE.CONGRUENCE",
+        "JM.GE.INTERSECT_PARALLEL"
+      ]
+    },
+    {
+      "id": "JM.GE.RECTANGLE",
+      "name": "矩形判定与性质",
+      "prerequisite_ids": [
+        "JM.GE.PARALLELOGRAM",
+        "JM.GE.RIGHT_TRIANGLE"
+      ]
+    },
+    {
+      "id": "JM.GE.RHOMBUS",
+      "name": "菱形判定与性质",
+      "prerequisite_ids": [
+        "JM.GE.PARALLELOGRAM",
+        "JM.GE.ISOSCELES"
+      ]
+    },
+    {
+      "id": "JM.GE.SQUARE",
+      "name": "正方形判定与性质",
+      "prerequisite_ids": [
+        "JM.GE.RECTANGLE",
+        "JM.GE.RHOMBUS"
+      ]
+    },
+    {
+      "id": "JM.GE.MIDLINE",
+      "name": "三角形中位线",
+      "prerequisite_ids": [
+        "JM.GE.PARALLELOGRAM"
+      ]
+    },
+    {
+      "id": "JM.GE.PROPORTION",
+      "name": "比例线段与平行线分线段成比例",
+      "prerequisite_ids": [
+        "JM.NA.RATIONAL_CALC",
+        "JM.GE.INTERSECT_PARALLEL"
+      ]
+    },
+    {
+      "id": "JM.GE.SIMILARITY",
+      "name": "相似三角形判定与性质",
+      "prerequisite_ids": [
+        "JM.GE.TRIANGLE_BASIC",
+        "JM.GE.PROPORTION"
+      ]
+    },
+    {
+      "id": "JM.GE.HOMOTHETY",
+      "name": "位似图形与位似坐标",
+      "prerequisite_ids": [
+        "JM.GE.SIMILARITY",
+        "JM.FN.COORDINATE"
+      ]
+    },
+    {
+      "id": "JM.GE.TRIGONOMETRY",
+      "name": "锐角三角函数与特殊角",
+      "prerequisite_ids": [
+        "JM.GE.RIGHT_TRIANGLE",
+        "JM.GE.SIMILARITY"
+      ]
+    },
+    {
+      "id": "JM.GE.RIGHT_SOLVE",
+      "name": "解直角三角形及实际应用",
+      "prerequisite_ids": [
+        "JM.GE.TRIGONOMETRY",
+        "JM.GE.PYTHAGORAS"
+      ]
+    },
+    {
+      "id": "JM.GE.CIRCLE_CONCEPT",
+      "name": "圆、弦、弧及点与圆的位置关系",
+      "prerequisite_ids": [
+        "JM.GE.SEGMENT_ANGLE"
+      ]
+    },
+    {
+      "id": "JM.GE.CIRCLE_CHORD",
+      "name": "圆心角、弦、弧与垂径定理",
+      "prerequisite_ids": [
+        "JM.GE.CIRCLE_CONCEPT",
+        "JM.GE.ISOSCELES"
+      ]
+    },
+    {
+      "id": "JM.GE.CIRCLE_INSCRIBED",
+      "name": "圆周角与圆心角关系",
+      "prerequisite_ids": [
+        "JM.GE.CIRCLE_CONCEPT",
+        "JM.GE.TRIANGLE_BASIC"
+      ]
+    },
+    {
+      "id": "JM.GE.CYCLIC_QUAD",
+      "name": "圆内接四边形",
+      "prerequisite_ids": [
+        "JM.GE.CIRCLE_INSCRIBED",
+        "JM.GE.POLYGON"
+      ]
+    },
+    {
+      "id": "JM.GE.CIRCLE_TANGENT",
+      "name": "直线与圆的位置关系、切线",
+      "prerequisite_ids": [
+        "JM.GE.CIRCLE_CONCEPT",
+        "JM.GE.RIGHT_TRIANGLE"
+      ]
+    },
+    {
+      "id": "JM.GE.CIRCLE_TRIANGLE",
+      "name": "三角形外接圆与内切圆",
+      "prerequisite_ids": [
+        "JM.GE.CIRCLE_CONCEPT",
+        "JM.GE.ISOSCELES",
+        "JM.GE.BISECTOR"
+      ]
+    },
+    {
+      "id": "JM.GE.ARC_SECTOR",
+      "name": "弧长与扇形面积",
+      "prerequisite_ids": [
+        "JM.GE.CIRCLE_CONCEPT",
+        "JM.GE.AREA"
+      ]
+    },
+    {
+      "id": "JM.GE.CONE",
+      "name": "圆锥侧面展开与面积",
+      "prerequisite_ids": [
+        "JM.GE.ARC_SECTOR",
+        "JM.GE.PYTHAGORAS"
+      ]
+    },
+    {
+      "id": "JM.GE.AXIAL",
+      "name": "轴对称与对称轴",
+      "prerequisite_ids": [
+        "JM.GE.SEGMENT_ANGLE"
+      ]
+    },
+    {
+      "id": "JM.GE.BISECTOR",
+      "name": "角平分线与垂直平分线性质",
+      "prerequisite_ids": [
+        "JM.GE.CONGRUENCE",
+        "JM.GE.AXIAL"
+      ]
+    },
+    {
+      "id": "JM.GE.TRANSLATION",
+      "name": "平移的性质与作图",
+      "prerequisite_ids": [
+        "JM.GE.SEGMENT_ANGLE"
+      ]
+    },
+    {
+      "id": "JM.GE.ROTATION",
+      "name": "旋转的性质与作图",
+      "prerequisite_ids": [
+        "JM.GE.SEGMENT_ANGLE"
+      ]
+    },
+    {
+      "id": "JM.GE.CENTRAL",
+      "name": "中心对称与中心对称图形",
+      "prerequisite_ids": [
+        "JM.GE.ROTATION"
+      ]
+    },
+    {
+      "id": "JM.GE.TRANSFORM_COORD",
+      "name": "坐标中的平移、旋转与对称",
+      "prerequisite_ids": [
+        "JM.FN.COORDINATE"
+      ]
+    },
+    {
+      "id": "JM.GE.CONSTRUCTION",
+      "name": "尺规作图",
+      "prerequisite_ids": [
+        "JM.GE.SEGMENT_ANGLE"
+      ]
+    },
+    {
+      "id": "JM.GE.PROJECTION",
+      "name": "投影与三视图",
+      "prerequisite_ids": [
+        "JM.GE.SEGMENT_ANGLE"
+      ]
+    },
+    {
+      "id": "JM.GE.PROOF",
+      "name": "几何命题、定义与证明",
+      "prerequisite_ids": [
+        "JM.GE.TRIANGLE_BASIC"
+      ]
+    },
+    {
+      "id": "JM.ST.SAMPLING",
+      "name": "数据收集、抽样与总体估计",
+      "prerequisite_ids": []
+    },
+    {
+      "id": "JM.ST.CHART",
+      "name": "统计图表与数据整理",
+      "prerequisite_ids": [
+        "JM.ST.SAMPLING"
+      ]
+    },
+    {
+      "id": "JM.ST.CENTRAL",
+      "name": "平均数、加权平均数、中位数与众数",
+      "prerequisite_ids": [
+        "JM.NA.RATIONAL_CALC",
+        "JM.ST.CHART"
+      ]
+    },
+    {
+      "id": "JM.ST.SPREAD",
+      "name": "极差、方差与数据波动",
+      "prerequisite_ids": [
+        "JM.ST.CENTRAL",
+        "JM.NA.POWER"
+      ]
+    },
+    {
+      "id": "JM.PR.EVENT",
+      "name": "随机事件与概率的意义",
+      "prerequisite_ids": []
+    },
+    {
+      "id": "JM.PR.ENUMERATION",
+      "name": "列表法、树状图法与等可能概率",
+      "prerequisite_ids": [
+        "JM.PR.EVENT",
+        "JM.NA.RATIONAL_CALC"
+      ]
+    },
+    {
+      "id": "JM.PR.FREQUENCY",
+      "name": "频率与概率估计",
+      "prerequisite_ids": [
+        "JM.PR.EVENT",
+        "JM.ST.SAMPLING"
+      ]
+    },
+    {
+      "id": "JM.CP.MODELING",
+      "name": "实际情境中的数学建模",
+      "prerequisite_ids": [
+        "JM.NA.ALGEBRA_EXPR"
+      ]
+    },
+    {
+      "id": "JM.CP.PATTERN",
+      "name": "数与图形规律探究",
+      "prerequisite_ids": [
+        "JM.NA.ALGEBRA_EXPR"
+      ]
+    }
+  ]
+}

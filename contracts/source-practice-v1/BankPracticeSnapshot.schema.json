@@ -1,0 +1,394 @@
+{
+  "$defs": {
+    "BankPracticeItem": {
+      "additionalProperties": false,
+      "properties": {
+        "order": {
+          "minimum": 1,
+          "title": "Order",
+          "type": "integer"
+        },
+        "target_point_id": {
+          "title": "Target Point Id",
+          "type": "string"
+        },
+        "question": {
+          "$ref": "#/$defs/BankQuestion"
+        }
+      },
+      "required": [
+        "order",
+        "target_point_id",
+        "question"
+      ],
+      "title": "BankPracticeItem",
+      "type": "object"
+    },
+    "BankQuestion": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "revision": {
+          "title": "Revision",
+          "type": "string"
+        },
+        "canonical_id": {
+          "title": "Canonical Id",
+          "type": "string"
+        },
+        "content_fingerprint": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Content Fingerprint"
+        },
+        "curriculum_version": {
+          "title": "Curriculum Version",
+          "type": "string"
+        },
+        "difficulty_version": {
+          "title": "Difficulty Version",
+          "type": "string"
+        },
+        "point_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Point Ids",
+          "type": "array"
+        },
+        "prerequisite_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Prerequisite Ids",
+          "type": "array"
+        },
+        "difficulty_score": {
+          "anyOf": [
+            {
+              "maximum": 100,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Difficulty Score"
+        },
+        "status": {
+          "enum": [
+            "eligible",
+            "blocked"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "block_reasons": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Block Reasons",
+          "type": "array"
+        },
+        "source_hash": {
+          "title": "Source Hash",
+          "type": "string"
+        },
+        "semantic_hash": {
+          "title": "Semantic Hash",
+          "type": "string"
+        },
+        "source_payload": {
+          "additionalProperties": true,
+          "title": "Source Payload",
+          "type": "object"
+        },
+        "semantic_payload": {
+          "additionalProperties": true,
+          "title": "Semantic Payload",
+          "type": "object"
+        },
+        "documents": {
+          "items": {
+            "$ref": "#/$defs/SourceDocument"
+          },
+          "title": "Documents",
+          "type": "array"
+        },
+        "asset_hashes": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Asset Hashes",
+          "type": "object"
+        }
+      },
+      "required": [
+        "id",
+        "revision",
+        "canonical_id",
+        "content_fingerprint",
+        "curriculum_version",
+        "difficulty_version",
+        "point_ids",
+        "prerequisite_ids",
+        "status",
+        "block_reasons",
+        "source_hash",
+        "semantic_hash",
+        "source_payload",
+        "semantic_payload",
+        "documents",
+        "asset_hashes"
+      ],
+      "title": "BankQuestion",
+      "type": "object"
+    },
+    "PracticeRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "quotas": {
+          "items": {
+            "$ref": "#/$defs/Quota"
+          },
+          "maxItems": 100,
+          "minItems": 1,
+          "title": "Quotas",
+          "type": "array"
+        },
+        "excluded_question_ids": {
+          "items": {
+            "maxLength": 200,
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Excluded Question Ids",
+          "type": "array"
+        },
+        "excluded_canonical_ids": {
+          "items": {
+            "maxLength": 200,
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Excluded Canonical Ids",
+          "type": "array"
+        },
+        "seed": {
+          "default": 0,
+          "title": "Seed",
+          "type": "integer"
+        },
+        "difficulty_version": {
+          "default": "p0-draft-v1",
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Difficulty Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "quotas"
+      ],
+      "title": "PracticeRequest",
+      "type": "object"
+    },
+    "Quota": {
+      "additionalProperties": false,
+      "properties": {
+        "point_id": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Point Id",
+          "type": "string"
+        },
+        "count": {
+          "default": 10,
+          "maximum": 100,
+          "minimum": 0,
+          "title": "Count",
+          "type": "integer"
+        },
+        "by_difficulty": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "propertyNames": {
+                "enum": [
+                  "basic",
+                  "intermediate",
+                  "advanced"
+                ]
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "By Difficulty"
+        },
+        "reference_score": {
+          "default": 50,
+          "maximum": 100,
+          "minimum": 0,
+          "title": "Reference Score",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "point_id"
+      ],
+      "title": "Quota",
+      "type": "object"
+    },
+    "Shortfall": {
+      "additionalProperties": false,
+      "properties": {
+        "point_id": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Point Id",
+          "type": "string"
+        },
+        "difficulty": {
+          "anyOf": [
+            {
+              "enum": [
+                "basic",
+                "intermediate",
+                "advanced"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Difficulty"
+        },
+        "requested": {
+          "minimum": 0,
+          "title": "Requested",
+          "type": "integer"
+        },
+        "selected": {
+          "minimum": 0,
+          "title": "Selected",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "point_id",
+        "requested",
+        "selected"
+      ],
+      "title": "Shortfall",
+      "type": "object"
+    },
+    "SourceDocument": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "sha256": {
+          "title": "Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "path",
+        "sha256"
+      ],
+      "title": "SourceDocument",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "source-practice-snapshot-v1",
+      "default": "source-practice-snapshot-v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "mode": {
+      "const": "development_validation",
+      "default": "development_validation",
+      "title": "Mode",
+      "type": "string"
+    },
+    "is_synthetic_student": {
+      "title": "Is Synthetic Student",
+      "type": "boolean"
+    },
+    "student_id": {
+      "title": "Student Id",
+      "type": "string"
+    },
+    "progress_revision": {
+      "title": "Progress Revision",
+      "type": "string"
+    },
+    "curriculum_version": {
+      "title": "Curriculum Version",
+      "type": "string"
+    },
+    "bank_sha256": {
+      "title": "Bank Sha256",
+      "type": "string"
+    },
+    "request": {
+      "$ref": "#/$defs/PracticeRequest"
+    },
+    "items": {
+      "items": {
+        "$ref": "#/$defs/BankPracticeItem"
+      },
+      "title": "Items",
+      "type": "array"
+    },
+    "shortfalls": {
+      "items": {
+        "$ref": "#/$defs/Shortfall"
+      },
+      "title": "Shortfalls",
+      "type": "array"
+    }
+  },
+  "required": [
+    "is_synthetic_student",
+    "student_id",
+    "progress_revision",
+    "curriculum_version",
+    "bank_sha256",
+    "request",
+    "items",
+    "shortfalls"
+  ],
+  "title": "BankPracticeSnapshot",
+  "type": "object"
+}

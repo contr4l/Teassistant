@@ -54,6 +54,8 @@ flowchart TB
 
 首期采用适配手机浏览器的网页上传和桌面备课页面，不开发原生 App 或小程序。
 
+手机端只承担材料拍摄或选择、页序调整、补传及上传状态；学生与进度管理、分析修正、组卷、预览、导出和评价以桌面端为验收入口。两端按同一账号、学生和考试记录共享材料，电脑也可直接上传已有文件。当前不以全流程手机操作作为验收条件。
+
 ## 4 核心数据模型
 
 | 实体 | 关键字段或约束 |
@@ -77,9 +79,11 @@ flowchart TB
 
 ## 5 题目与证据结构
 
-题目以完整大题为存储和抽取单位，内部保留有序小问。内容由 paragraph、formula、image 和 subquestion 等节点构成；公式保存 LaTeX，几何图形保存原页裁剪图，不要求 AI 重绘。
+题目以完整大题为存储和抽取单位，内部保留有序小问。目标内容包括段落、公式、图片、表格和小问；保存公式语义表示时仍保留其源对象及预览，几何图形不要求 AI 重绘。DOCX 优先读取 OOXML，按 VML/EMU 显示尺寸保留预览，不以缺公式的纯文字作为完整识别结果。
 
 每个识别元素保留 asset_id、page_id、页面规范化后的宽高、旋转及裁剪变换、归一化区域坐标。模型原始坐标通过适配器统一转换，不将不同供应商坐标直接混用。
+
+上述区域适用于页面材料；DOCX 来源另保留文档摘要、段落、表格及关系定位。现有 P0 `SourceRegion` 只有页码和区域，`ContentNode` 尚未表达表格及公式图像回退元数据、原尺寸。来源层进入正式业务层前必须版本化补齐合同，或执行经验证的转换并获得可靠定位；不得伪造页码区域或静默丢弃表格。合同变更须同步识别、组卷、导出、评测和生成 Schema 的调用方。
 
 跨页大题可引用多个来源区域；答案与作答均按题目及小问路径关联。相同题号不足以证明关联，必须结合资料包、题型、小问结构和内容。重号、漏页或矛盾分数保留为未确定。
 
@@ -87,15 +91,19 @@ flowchart TB
 
 ## 6 自动加工与任务可靠性
 
-题库流程：文件检查 → 页面规范化 → 页面识别 → 跨页拆题及合并 → 答案关联 → 考点标记与难度评分 → 结构和完整性校验 → 可检索入库。
+题库流程：文件清点及原件保存 → 按格式提取 → 拆题及答案关联 → 保真校验 → 可检索来源保存 → AI 统一目录、前置知识和难度 → 程序校验与同题处理 → 业务及导出适配 → 自动发布。详细阶段、依赖及验收见[试题录入工作流](question-ingestion-workflow.md)。
 
-题目状态：processing → ready 或 processing_failed。ready 由处理流程自动决定，不表示经过人工批准；失败后可修复文件或重新处理，仍不增加审核环节。
+来源层的 `structure_status=imported/processing_failed` 与正式 `Question.status=ready/processing_failed` 分开。语义阶段记录等待依赖、执行、成功和失败，属于待实现的阶段状态，不直接改写现有 Question 枚举。来源成功题可浏览，但缺合法标签、前置知识、真实评分或业务及导出适配时不能发布。ready 由程序自动决定，不表示经过人工批准。
+
+来源考点词条保存原句和位置，仅作检索与模型输入。所有结构成功题都要执行统一目录映射及评分；未命中词表不阻断 AI 分析，已命中也不绕过目录校验。已有解析可选；缺可用答案则不能发布。模型输入包含可读公式及图形，不能只提交原生文档的纯文本。
 
 考试流程：规范化页面 → 识别试题、作答与批改 → 关联 → 错题与考点分析 → 汇总。考试允许 partial：已确定项目可查看和使用，未确定部分明确展示。老师纠正自己的考试识别结果属于产品交互，不是题库维护。
 
 任务状态：queued、running、partial、succeeded、failed、cancelled。job_step 保存阶段结果。自动重试只针对超时、限流和暂时服务错误；不可用文件等永久错误直接暴露。建议每阶段最多 3 次自动尝试，再进入可手动重试状态。
 
 以文件摘要、用途、处理版本和阶段组成幂等键；不跨老师复用私有材料。重复执行不重复插入题目，不覆盖人工纠正。重跑生成新版本，现有练习继续使用原版本。
+
+题库语义阶段还固定内容、目录及评分规则版本；更换规则从受影响阶段续跑，不重复提取未变化原件。缺目录或未显式配置模型时等待依赖，不伪造标签和评分，也不无限调用。来源变化时使下游结果失效并重算，已发布旧版本和练习快照保留。
 
 业务记录与 outbox 在同一 PostgreSQL 事务提交；派发器投递后标记，投递可能重复，Worker 幂等消除影响。租约、心跳及过期恢复处理 Worker 中断；Redis 丢失消息时依据数据库未完成任务重新派发。外部模型调用超时后的重复计费无法完全消除，记录尝试次数并设费用限额。
 
@@ -144,4 +152,16 @@ Teassistant/
   infra/                      # Docker Compose 与部署说明
 ```
 
-这是目标目录。当前 P0 离线实现位于 `backend/app/`、`backend/tests/`、`scripts/`、`contracts/p0-v1/` 和 `evals/fixtures/`；尚未实现网页、数据库与持久任务服务。学生原卷、凭据和真实样本不提交到源码仓库。
+这是目标目录。当前 P0 离线实现位于 `backend/app/`、`backend/tests/`、`scripts/`、`contracts/p0-v1/` 和 `evals/fixtures/`。另已实现 DOCX 本地来源库的 HTML/SQLite 原型，不等于已交付目标网页、PostgreSQL 业务数据库或持久任务服务。学生原卷、凭据和真实样本不提交到源码仓库。
+
+来源关联 V3 使用 `native_equation.py` 只读提取完整 MathType MTEF payload 身份，由 `source_association.py` 按有序结构、唯一预览绑定及精确配图执行比较。`source-bank-v3` 保留原生摘要与逐媒体证据；预览像素一致与源对象身份一致分开表达。固定样本评估独立于构建批次状态，不改变业务 `Question` 合同或 ready 门禁。详见 `acceptance/association-v3-contract.md`。
+
+语义试跑原型由 `semantic_contracts.py`、`semantic_inputs.py`、`semantic_models.py`、`semantic_bank.py` 与 `annotate_question_bank.py` 组成，输出来源层侧附标记，未改动旧业务合同。源/输入/目录/提示/模型版本共同限制续跑复用，记录全部题目的成功、失败与未尝试；程序派生闭包和模型证据分开。真实 Codex CLI 开发试跑已完成200题初评，生产 DeepSeek 语义任务与正式发布仍独立，见 `semantic-bank.md`。
+
+来源语义的真实试跑现已完成200题初评，目录V2采用追加点及显式兼容迁移：`semantic_migration.py` 锁定新旧目录、受影响清单和原始模型响应，177题保留原始assessment并新目录校验、23题实际重评；输出分别记录模型目录与验证目录。`semantic_view.py` 提供独立离线页面/CSV及相对图片副本。正式业务桥接、教师校准与发布仍独立，实际数据见 `acceptance/semantic-v1-live-execution.md`。
+
+来源组卷使用独立 `source-practice-bank-v1` / `source-practice-snapshot-v1` 合同，由 `bank_practice.py` 桥接冻结来源、语义、完整目录及资产摘要，保留所有阻断记录；不制造页码/bbox或修改旧Question.ready。`allocation.py` 由新来源路径与旧P0共同复用，负责全局配额、同题连通组去重和原题排除。`source_exporting.py` 将源 MathType OLE、OMML、图片及表格写入原生DOCX，再实际转PDF，输出分离题答文件与manifest。入口 `build_bank_practice.py` 导出时重读当前来源、语义、目录与学生进度，拒绝快照漂移；输出不能写入任一输入目录。当前仍是开发验证路径，详情见 `bank-practice.md`。
+
+试卷版式由 `print_layout.py` 与 `templates/exam-print-v1/` 管理空白Word样式，学生支持answer_space/compact，教师只取answer+analysis作用域。`source-practice-export-v2` 记录版式及模板版本，保持原snapshot_id；对短提示+单大型MathType采用展示公式段，保留原生字节与尺寸，普通混排不重写。`export_practice_layouts.py` 从同一冻结题单生成两个布局后原子发布，变化的进度或失败转换不能留下半套比较文件。最终版面以实际PDF逐页验收，不能由样式/XML或合成响应推导老师满意；见 `exam-layout.md`。
+
+LaTeX PDF 为独立来源导出路径：`latex_contracts.py` 将公式目录绑定原生对象完整哈希和选题快照；`math_latex.py` 严格解析支持的 MTEF/OMML 数学结构并转换为数学 LaTeX；`latex_exporting.py` 排版文本、表格与原几何图并实际调用 XeLaTeX。禁止原公式预览代替本路径的数学结构，未知记录、字符或编译缺字须失败。`export_latex_practice.py` 对同一快照生成两种版式并整体原子发布；原 Word 路径保持独立。工具安装、覆盖范围及实际证据见 `latex-export.md`。

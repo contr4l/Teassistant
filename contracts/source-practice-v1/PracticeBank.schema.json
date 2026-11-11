@@ -1,0 +1,272 @@
+{
+  "$defs": {
+    "BankQuestion": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "revision": {
+          "title": "Revision",
+          "type": "string"
+        },
+        "canonical_id": {
+          "title": "Canonical Id",
+          "type": "string"
+        },
+        "content_fingerprint": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Content Fingerprint"
+        },
+        "curriculum_version": {
+          "title": "Curriculum Version",
+          "type": "string"
+        },
+        "difficulty_version": {
+          "title": "Difficulty Version",
+          "type": "string"
+        },
+        "point_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Point Ids",
+          "type": "array"
+        },
+        "prerequisite_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Prerequisite Ids",
+          "type": "array"
+        },
+        "difficulty_score": {
+          "anyOf": [
+            {
+              "maximum": 100,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Difficulty Score"
+        },
+        "status": {
+          "enum": [
+            "eligible",
+            "blocked"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "block_reasons": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Block Reasons",
+          "type": "array"
+        },
+        "source_hash": {
+          "title": "Source Hash",
+          "type": "string"
+        },
+        "semantic_hash": {
+          "title": "Semantic Hash",
+          "type": "string"
+        },
+        "source_payload": {
+          "additionalProperties": true,
+          "title": "Source Payload",
+          "type": "object"
+        },
+        "semantic_payload": {
+          "additionalProperties": true,
+          "title": "Semantic Payload",
+          "type": "object"
+        },
+        "documents": {
+          "items": {
+            "$ref": "#/$defs/SourceDocument"
+          },
+          "title": "Documents",
+          "type": "array"
+        },
+        "asset_hashes": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Asset Hashes",
+          "type": "object"
+        }
+      },
+      "required": [
+        "id",
+        "revision",
+        "canonical_id",
+        "content_fingerprint",
+        "curriculum_version",
+        "difficulty_version",
+        "point_ids",
+        "prerequisite_ids",
+        "status",
+        "block_reasons",
+        "source_hash",
+        "semantic_hash",
+        "source_payload",
+        "semantic_payload",
+        "documents",
+        "asset_hashes"
+      ],
+      "title": "BankQuestion",
+      "type": "object"
+    },
+    "Curriculum": {
+      "additionalProperties": false,
+      "properties": {
+        "version": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Version",
+          "type": "string"
+        },
+        "is_synthetic": {
+          "default": true,
+          "title": "Is Synthetic",
+          "type": "boolean"
+        },
+        "points": {
+          "items": {
+            "$ref": "#/$defs/KnowledgePoint"
+          },
+          "minItems": 1,
+          "title": "Points",
+          "type": "array"
+        }
+      },
+      "required": [
+        "version",
+        "points"
+      ],
+      "title": "Curriculum",
+      "type": "object"
+    },
+    "KnowledgePoint": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "prerequisite_ids": {
+          "items": {
+            "maxLength": 200,
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Prerequisite Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "name"
+      ],
+      "title": "KnowledgePoint",
+      "type": "object"
+    },
+    "SourceDocument": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "sha256": {
+          "title": "Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "path",
+        "sha256"
+      ],
+      "title": "SourceDocument",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "source-practice-bank-v1",
+      "default": "source-practice-bank-v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "mode": {
+      "const": "development_validation",
+      "default": "development_validation",
+      "title": "Mode",
+      "type": "string"
+    },
+    "source_bank_sha256": {
+      "title": "Source Bank Sha256",
+      "type": "string"
+    },
+    "annotations_sha256": {
+      "title": "Annotations Sha256",
+      "type": "string"
+    },
+    "curriculum_sha256": {
+      "title": "Curriculum Sha256",
+      "type": "string"
+    },
+    "curriculum_version": {
+      "title": "Curriculum Version",
+      "type": "string"
+    },
+    "curriculum_snapshot": {
+      "$ref": "#/$defs/Curriculum"
+    },
+    "questions": {
+      "items": {
+        "$ref": "#/$defs/BankQuestion"
+      },
+      "title": "Questions",
+      "type": "array"
+    }
+  },
+  "required": [
+    "source_bank_sha256",
+    "annotations_sha256",
+    "curriculum_sha256",
+    "curriculum_version",
+    "curriculum_snapshot",
+    "questions"
+  ],
+  "title": "PracticeBank",
+  "type": "object"
+}

@@ -4,7 +4,7 @@
 
 ## 1 选型结论
 
-采用 React 与 TypeScript 前端、Python FastAPI 后端、PostgreSQL 主库、Celery 与 Redis 后台队列。生产业务模型仅适配 DeepSeek API：`https://api.deepseek.com`，模型名 `deepseek-flash`（官方滚动模型别名）。Codex CLI 可供开发者快速验证同一单题合同，不作为生产 Provider；两种路径之间不自动回退。题目内容通过结构化数据保存，导出使用 Pandoc 与 LibreOffice。
+采用 React 与 TypeScript 前端、Python FastAPI 后端、PostgreSQL 主库、Celery 与 Redis 后台队列。生产业务模型仅适配 DeepSeek API：`https://api.deepseek.com`，模型名 `deepseek-flash`（官方滚动模型别名）。Codex CLI 可供开发者快速验证同一单题合同，不作为生产 Provider；两种路径之间不自动回退。题目内容通过结构化数据保存；Word 导出使用 Pandoc/原生对象与 LibreOffice，统一打印排版另提供 LaTeX 与 XeLaTeX 路径。
 
 这些选择以 5 位老师试用、图片文档处理和快速形成备课闭环为依据，不构成已完成的性能、准确率或费用承诺。
 
@@ -22,6 +22,7 @@
 | 后台任务 | Celery、Redis；PostgreSQL 保存任务状态与 outbox | 识别和导出任务需跨请求执行、失败重试与独立限流 | Temporal 等工作流平台在流程复杂和规模增长后再评估 |
 | 文件 | Storage 接口；本地目录实现用于开发，私有对象存储用于试用 | 原卷、图形与导出不塞入数据库；不绑定单一存储供应商 | 对象存储提供商在部署时确认；不为首期自建存储集群 |
 | 页面处理 | pypdfium2、Pillow | PDF 页面栅格化、旋转、缩放和区域裁剪 | 专用 OCR 在多模态识别实测不足时接入 |
+| DOCX 来源提取 | 原生 OOXML 与 relationships、MathType OLE 预览、表格及源显示尺寸；当前使用 Python XML 与 lxml | 先保留完整来源，避免整卷 OCR 丢公式或表格；本批已有真实导入证据 | 语义转写、统一标签和评分另走后续阶段，不以来源保存成功代替可组卷发布 |
 | 生产模型调用 | DeepSeek API、HTTPX 与内部 Provider 接口 | 统一超时、限流、有界重试和 Pydantic 校验；`deepseek-flash` 同时用于图片题面抽取与文本标记、评分的首轮验证 | 不加入其他生产 Provider 或自动 fallback；Codex CLI 仅用于开发者本地快速验证 |
 | 开发者模型验证 | Codex CLI `codex exec` | 复用单题输入和输出合同，read-only sandbox、临时工作目录、ephemeral 会话和 JSON Schema 输出 | 不调用 Codex CLI 作为生产后端；模型可选显式指定，否则记录默认模型未解析 |
 | DOCX 与 PDF | Pandoc、python-docx、LibreOffice | 原生数学结构、固定模板、图形插入及统一 PDF 转换 | 复杂公式失败时提供明确可见的局部图像回退；不把整份练习变成截图 |
@@ -74,7 +75,9 @@ AI 调用和导出使用不同队列；优先保证老师考试处理，批量�
 
 ## 5 数学内容与导出方案
 
-统一内容树产生前端视图、题目 DOCX 和答案 DOCX。公式从 LaTeX 经 Pandoc 写入 OMML，python-docx 调整模板、留白及页内布局；再由 LibreOffice 将各 DOCX 转成 PDF。Pandoc 官方支持 DOCX 数学输出为 OMML，并支持参考文档样式；这不保证所有试卷公式和复杂排版均无损，需 P0 验证。[Pandoc 数学与 DOCX 文档](https://pandoc.org/MANUAL.html)。
+统一内容树产生前端视图、题目 DOCX 和答案 DOCX。来源层先保留原数学对象、预览和表格；具备合法 LaTeX 的公式经 Pandoc 写入 OMML，python-docx 调整模板、留白及页内布局；再由 LibreOffice 将各 DOCX 转成 PDF。Pandoc 官方支持 DOCX 数学输出为 OMML，并支持参考文档样式；这不保证所有试卷公式和复杂排版均无损，需 P0 验证。[Pandoc 数学与 DOCX 文档](https://pandoc.org/MANUAL.html)。
+
+MathType 来源先保存保真预览与 OLE；LaTeX 打印路径对支持的原生记录单独进行结构转换并严格校验，未知结构或字符拒绝导出，不使用公式图片兜底后宣称统一数学排版。其固定样本覆盖和部署边界见[LaTeX 导出](latex-export.md)；不能由十题样张外推整个题库全部公式。源保留、模型读取和正式导出分别处理，不改变生产模型供应商。
 
 MVP 要求文字与支持的公式可编辑、几何图形为清晰图片。必要的公式图像回退必须可追踪，不能静默省略。固定随容器发布的中文字体、导出模板、转换器版本；禁止依赖部署机器临时字体。
 
@@ -91,3 +94,7 @@ MVP 要求文字与支持的公式可编辑、几何图形为清晰图片。必�
 ## 7 选型生效条件
 
 React、FastAPI、PostgreSQL、独立 Worker 与 DeepSeek API 单一生产 Provider 为当前基线。Codex CLI 只用于开发者快速验证。模型真实质量、难度分段和导出细节仍需验证；若证据表明方案不适合，再更新本文并记录迁移原因，不改变 PRD 的产品目标。
+
+## 8 本地来源组卷导出补充（2026-11-11）
+
+来源原型新增独立source-practice合同及CLI，复用NetworkX容量分配内核。MathType题目从源DOCX复制OLE对象、预览及关系部件，OMML直接保留，python-docx/lxml负责文本、表格与包结构；该路径无需Pandoc重新构造公式。旧P0的LaTeX→Pandoc→OMML路径仍保留。两路均用实际LibreOffice转PDF，显式配置转换器与字体、临时独立profile、成功后原子发布；原生内容或转换失败时不交付缺内容的PDF。本机真实样张与358项回归已验证，生产服务器上的转换器版本、字体和部署仍需独立固定与验收，详见[批次证据](acceptance/bank-practice-v1-execution.md)。
