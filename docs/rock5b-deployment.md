@@ -4,7 +4,7 @@
 
 ## 当前是否能克隆后一键运行
 
-准备好源码、Docker和私有配置后，可以用`deploy.py bootstrap`完成配置初始化、构建、启动、等待健康及预设账号导入。但当前工作区的网页、Docker、账号初始化等更新尚未提交/推送，直接克隆旧版本不能得到这些能力；应先将准备部署的版本同步到仓库。不把本地文件存在当作远端已发布，也不在本批自动提交全部既有改动。
+当前版本包含网页、Docker部署和账号初始化入口。克隆仓库最新`main`，准备好Docker和私有配置后，可以用`deploy.py bootstrap`完成配置初始化、构建、启动、等待健康及预设账号导入。已有克隆应先同步最新`main`；私有账号文件、API key和题库仍需单独准备，不随Git分发。
 
 本地完整镜像构建此前因Docker Hub/GHCR下载超时未完成，ROCK 5B尚未实机部署。这份文档是可执行的准备与操作流程，不是板上通过报告。当前GitHub Actions镜像验证/发布目标为linux/amd64，不能直接把该镜像当作ROCK 5B镜像；本流程在板子上原生构建linux/arm64。
 
@@ -27,7 +27,7 @@ Python业务环境、前端、字体、LibreOffice与XeLaTeX在镜像内，宿�
 
 ## 2 源码与初始配置
 
-在本次功能已提交到仓库的前提下：
+克隆主分支并初始化私有配置：
 
 ```bash
 git clone git@github.com:contr4l/Teassistant.git
