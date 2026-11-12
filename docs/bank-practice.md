@@ -9,7 +9,7 @@
 - `--progress`：学生当前进度，使用 `contracts/p0-v1/StudentProgress.schema.json`。更新时写入新 revision 和真实已学考点，不能把“选择了目标考点”当作已学习全部前置知识。
 - `--request`：`PracticeRequest`。真实初评的 `difficulty_version` 为 `junior-math-demand-v1`，不能沿用合成 P0 的默认版本。
 
-语义结果引用的原始试跑证据目录也需保留在同一语义工作区内；验证器会核对原始 run 的题目范围、来源摘要和难度规则版本。当前开发证据包含本机路径，不应只复制最终 annotations 文件便声称已完成服务器迁移。
+语义结果引用的原始试跑证据目录也需保留在同一语义工作区内；验证器会核对原始 run 的题目范围、来源摘要和难度规则版本。开发证据可能包含本机绝对路径，迁移时使用 `scripts/package_question_bank.py --bank-dir 来源目录 --semantic-dir 语义目录 --output-dir 新目录` 生成自包含包。打包重写副本的证据路径为相对包根的路径，原始run/call字节与摘要仍逐项校验；不能只复制最终annotations。完整结构与挂载见 [部署指南](deployment.md)。
 
 示例仅展示字段，`example-student` 及其进度为合成数据：
 

@@ -1,0 +1,793 @@
+{
+  "$defs": {
+    "DiagnosisProposal": {
+      "additionalProperties": false,
+      "properties": {
+        "number": {
+          "maximum": 300,
+          "minimum": 1,
+          "title": "Number",
+          "type": "integer"
+        },
+        "part_path": {
+          "default": "",
+          "title": "Part Path",
+          "type": "string"
+        },
+        "outcome": {
+          "enum": [
+            "correct",
+            "incorrect",
+            "partial",
+            "unanswered",
+            "unknown"
+          ],
+          "title": "Outcome",
+          "type": "string"
+        },
+        "point_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Point Ids",
+          "type": "array"
+        },
+        "reason": {
+          "default": "",
+          "title": "Reason",
+          "type": "string"
+        },
+        "reason_status": {
+          "default": "unknown",
+          "enum": [
+            "supported",
+            "hypothesis",
+            "unknown"
+          ],
+          "title": "Reason Status",
+          "type": "string"
+        },
+        "evidence": {
+          "items": {
+            "$ref": "#/$defs/ExamEvidence"
+          },
+          "title": "Evidence",
+          "type": "array"
+        },
+        "suggested_action": {
+          "default": "",
+          "title": "Suggested Action",
+          "type": "string"
+        }
+      },
+      "required": [
+        "number",
+        "outcome"
+      ],
+      "title": "DiagnosisProposal",
+      "type": "object"
+    },
+    "ExamEvidence": {
+      "additionalProperties": false,
+      "properties": {
+        "page_id": {
+          "title": "Page Id",
+          "type": "string"
+        },
+        "bbox": {
+          "maxItems": 4,
+          "minItems": 4,
+          "prefixItems": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            }
+          ],
+          "title": "Bbox",
+          "type": "array"
+        },
+        "kind": {
+          "enum": [
+            "printed_question",
+            "handwriting",
+            "grading",
+            "reference",
+            "header"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "excerpt": {
+          "default": "",
+          "title": "Excerpt",
+          "type": "string"
+        }
+      },
+      "required": [
+        "page_id",
+        "bbox",
+        "kind"
+      ],
+      "title": "ExamEvidence",
+      "type": "object"
+    },
+    "ExamRegion": {
+      "additionalProperties": false,
+      "properties": {
+        "page_id": {
+          "title": "Page Id",
+          "type": "string"
+        },
+        "bbox": {
+          "maxItems": 4,
+          "minItems": 4,
+          "prefixItems": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            }
+          ],
+          "title": "Bbox",
+          "type": "array"
+        },
+        "role": {
+          "enum": [
+            "paper",
+            "response",
+            "reference"
+          ],
+          "title": "Role",
+          "type": "string"
+        },
+        "question_numbers": {
+          "items": {
+            "maximum": 300,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "title": "Question Numbers",
+          "type": "array"
+        },
+        "description": {
+          "default": "",
+          "title": "Description",
+          "type": "string"
+        }
+      },
+      "required": [
+        "page_id",
+        "bbox",
+        "role"
+      ],
+      "title": "ExamRegion",
+      "type": "object"
+    },
+    "GradingObservation": {
+      "additionalProperties": false,
+      "properties": {
+        "part_path": {
+          "default": "",
+          "title": "Part Path",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "mark",
+            "deducted",
+            "awarded",
+            "maximum",
+            "total_awarded",
+            "total_maximum"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "maximum": 10000,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Value"
+        },
+        "mark": {
+          "anyOf": [
+            {
+              "enum": [
+                "correct",
+                "incorrect",
+                "partial",
+                "unclear"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Mark"
+        },
+        "literal": {
+          "minLength": 1,
+          "title": "Literal",
+          "type": "string"
+        },
+        "sources": {
+          "items": {
+            "$ref": "#/$defs/ExamEvidence"
+          },
+          "minItems": 1,
+          "title": "Sources",
+          "type": "array"
+        }
+      },
+      "required": [
+        "kind",
+        "literal",
+        "sources"
+      ],
+      "title": "GradingObservation",
+      "type": "object"
+    },
+    "PaperQuestion": {
+      "additionalProperties": false,
+      "properties": {
+        "number": {
+          "maximum": 300,
+          "minimum": 1,
+          "title": "Number",
+          "type": "integer"
+        },
+        "text": {
+          "minLength": 1,
+          "title": "Text",
+          "type": "string"
+        },
+        "part_paths": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Part Paths",
+          "type": "array"
+        },
+        "question_type": {
+          "default": "unknown",
+          "enum": [
+            "choice",
+            "fill_blank",
+            "free_response",
+            "unknown"
+          ],
+          "title": "Question Type",
+          "type": "string"
+        },
+        "max_score": {
+          "anyOf": [
+            {
+              "maximum": 1000,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Score"
+        },
+        "sources": {
+          "items": {
+            "$ref": "#/$defs/ExamEvidence"
+          },
+          "minItems": 1,
+          "title": "Sources",
+          "type": "array"
+        },
+        "score_sources": {
+          "items": {
+            "$ref": "#/$defs/ExamEvidence"
+          },
+          "title": "Score Sources",
+          "type": "array"
+        },
+        "completeness": {
+          "default": "complete",
+          "enum": [
+            "complete",
+            "partial"
+          ],
+          "title": "Completeness",
+          "type": "string"
+        },
+        "point_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Point Ids",
+          "type": "array"
+        },
+        "difficulty_score": {
+          "anyOf": [
+            {
+              "maximum": 100,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Difficulty Score"
+        }
+      },
+      "required": [
+        "number",
+        "text",
+        "sources"
+      ],
+      "title": "PaperQuestion",
+      "type": "object"
+    },
+    "ReferenceAnswer": {
+      "additionalProperties": false,
+      "properties": {
+        "number": {
+          "maximum": 300,
+          "minimum": 1,
+          "title": "Number",
+          "type": "integer"
+        },
+        "part_path": {
+          "default": "",
+          "title": "Part Path",
+          "type": "string"
+        },
+        "text": {
+          "minLength": 1,
+          "title": "Text",
+          "type": "string"
+        },
+        "sources": {
+          "items": {
+            "$ref": "#/$defs/ExamEvidence"
+          },
+          "minItems": 1,
+          "title": "Sources",
+          "type": "array"
+        }
+      },
+      "required": [
+        "number",
+        "text",
+        "sources"
+      ],
+      "title": "ReferenceAnswer",
+      "type": "object"
+    },
+    "SectionScoreRule": {
+      "additionalProperties": false,
+      "properties": {
+        "scope": {
+          "const": "per_question",
+          "default": "per_question",
+          "title": "Scope",
+          "type": "string"
+        },
+        "literal": {
+          "minLength": 1,
+          "title": "Literal",
+          "type": "string"
+        },
+        "question_numbers": {
+          "items": {
+            "maximum": 300,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "minItems": 1,
+          "title": "Question Numbers",
+          "type": "array"
+        },
+        "max_score": {
+          "maximum": 1000,
+          "minimum": 0,
+          "title": "Max Score",
+          "type": "number"
+        },
+        "sources": {
+          "items": {
+            "$ref": "#/$defs/ExamEvidence"
+          },
+          "minItems": 1,
+          "title": "Sources",
+          "type": "array"
+        }
+      },
+      "required": [
+        "literal",
+        "question_numbers",
+        "max_score",
+        "sources"
+      ],
+      "title": "SectionScoreRule",
+      "type": "object"
+    },
+    "StudentResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "number": {
+          "maximum": 300,
+          "minimum": 1,
+          "title": "Number",
+          "type": "integer"
+        },
+        "part_path": {
+          "default": "",
+          "title": "Part Path",
+          "type": "string"
+        },
+        "transcript": {
+          "default": "",
+          "title": "Transcript",
+          "type": "string"
+        },
+        "legibility": {
+          "enum": [
+            "readable",
+            "partial",
+            "illegible",
+            "blank"
+          ],
+          "title": "Legibility",
+          "type": "string"
+        },
+        "alternatives": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Alternatives",
+          "type": "array"
+        },
+        "sources": {
+          "items": {
+            "$ref": "#/$defs/ExamEvidence"
+          },
+          "minItems": 1,
+          "title": "Sources",
+          "type": "array"
+        },
+        "grading": {
+          "items": {
+            "$ref": "#/$defs/GradingObservation"
+          },
+          "title": "Grading",
+          "type": "array"
+        },
+        "paper_match": {
+          "default": "uncertain",
+          "enum": [
+            "matched",
+            "uncertain",
+            "conflicting"
+          ],
+          "title": "Paper Match",
+          "type": "string"
+        },
+        "association_reason": {
+          "default": "",
+          "title": "Association Reason",
+          "type": "string"
+        },
+        "paper_sources": {
+          "items": {
+            "$ref": "#/$defs/ExamEvidence"
+          },
+          "title": "Paper Sources",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "number",
+        "legibility",
+        "sources"
+      ],
+      "title": "StudentResponse",
+      "type": "object"
+    },
+    "TeacherReport": {
+      "additionalProperties": false,
+      "properties": {
+        "overview": {
+          "maxLength": 5000,
+          "minLength": 1,
+          "title": "Overview",
+          "type": "string"
+        },
+        "strengths": {
+          "items": {
+            "$ref": "#/$defs/TeacherReportItem"
+          },
+          "maxItems": 10,
+          "title": "Strengths",
+          "type": "array"
+        },
+        "priorities": {
+          "items": {
+            "$ref": "#/$defs/TeacherReportItem"
+          },
+          "maxItems": 10,
+          "title": "Priorities",
+          "type": "array"
+        },
+        "next_steps": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 15,
+          "title": "Next Steps",
+          "type": "array"
+        },
+        "unresolved": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 30,
+          "title": "Unresolved",
+          "type": "array"
+        }
+      },
+      "required": [
+        "overview"
+      ],
+      "title": "TeacherReport",
+      "type": "object"
+    },
+    "TeacherReportItem": {
+      "additionalProperties": false,
+      "properties": {
+        "title": {
+          "maxLength": 300,
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        },
+        "question_numbers": {
+          "items": {
+            "maximum": 300,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "minItems": 1,
+          "title": "Question Numbers",
+          "type": "array"
+        },
+        "point_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Point Ids",
+          "type": "array"
+        },
+        "observation": {
+          "maxLength": 3000,
+          "minLength": 1,
+          "title": "Observation",
+          "type": "string"
+        },
+        "interpretation": {
+          "maxLength": 3000,
+          "title": "Interpretation",
+          "type": "string"
+        },
+        "verification": {
+          "maxLength": 3000,
+          "title": "Verification",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "confirmed",
+            "hypothesis",
+            "unknown"
+          ],
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "title",
+        "question_numbers",
+        "observation",
+        "interpretation",
+        "verification",
+        "status"
+      ],
+      "title": "TeacherReportItem",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "One stage per request; the orchestrator rejects fields from other stages.",
+  "properties": {
+    "task": {
+      "enum": [
+        "layout",
+        "paper",
+        "reference",
+        "response",
+        "diagnosis",
+        "report"
+      ],
+      "title": "Task",
+      "type": "string"
+    },
+    "exam_title": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Exam Title"
+    },
+    "page_classification": {
+      "default": "unclear",
+      "enum": [
+        "paper",
+        "response",
+        "reference",
+        "mixed",
+        "blank",
+        "unclear"
+      ],
+      "title": "Page Classification",
+      "type": "string"
+    },
+    "printed_page_number": {
+      "anyOf": [
+        {
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Printed Page Number"
+    },
+    "printed_page_count": {
+      "anyOf": [
+        {
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Printed Page Count"
+    },
+    "regions": {
+      "items": {
+        "$ref": "#/$defs/ExamRegion"
+      },
+      "title": "Regions",
+      "type": "array"
+    },
+    "questions": {
+      "items": {
+        "$ref": "#/$defs/PaperQuestion"
+      },
+      "title": "Questions",
+      "type": "array"
+    },
+    "scoring_rules": {
+      "items": {
+        "$ref": "#/$defs/SectionScoreRule"
+      },
+      "title": "Scoring Rules",
+      "type": "array"
+    },
+    "responses": {
+      "items": {
+        "$ref": "#/$defs/StudentResponse"
+      },
+      "title": "Responses",
+      "type": "array"
+    },
+    "grading": {
+      "items": {
+        "$ref": "#/$defs/GradingObservation"
+      },
+      "title": "Grading",
+      "type": "array"
+    },
+    "diagnoses": {
+      "items": {
+        "$ref": "#/$defs/DiagnosisProposal"
+      },
+      "title": "Diagnoses",
+      "type": "array"
+    },
+    "teacher_report": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/TeacherReport"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "reference_answers": {
+      "items": {
+        "$ref": "#/$defs/ReferenceAnswer"
+      },
+      "title": "Reference Answers",
+      "type": "array"
+    },
+    "warnings": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Warnings",
+      "type": "array"
+    }
+  },
+  "required": [
+    "task"
+  ],
+  "title": "ExamModelResponse",
+  "type": "object"
+}

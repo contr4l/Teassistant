@@ -1,0 +1,211 @@
+{
+  "$defs": {
+    "ExamMaterial": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "source_path": {
+          "title": "Source Path",
+          "type": "string"
+        },
+        "role": {
+          "enum": [
+            "paper",
+            "response",
+            "reference"
+          ],
+          "title": "Role",
+          "type": "string"
+        },
+        "page_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Page Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "sha256",
+        "source_path",
+        "role",
+        "page_ids"
+      ],
+      "title": "ExamMaterial",
+      "type": "object"
+    },
+    "ExamPage": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "document_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Document Sha256",
+          "type": "string"
+        },
+        "source_page": {
+          "minimum": 1,
+          "title": "Source Page",
+          "type": "integer"
+        },
+        "role": {
+          "enum": [
+            "paper",
+            "response",
+            "reference"
+          ],
+          "title": "Role",
+          "type": "string"
+        },
+        "image_path": {
+          "title": "Image Path",
+          "type": "string"
+        },
+        "image_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Image Sha256",
+          "type": "string"
+        },
+        "width": {
+          "minimum": 1,
+          "title": "Width",
+          "type": "integer"
+        },
+        "height": {
+          "minimum": 1,
+          "title": "Height",
+          "type": "integer"
+        },
+        "parent_page_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Parent Page Id"
+        },
+        "parent_bbox": {
+          "anyOf": [
+            {
+              "maxItems": 4,
+              "minItems": 4,
+              "prefixItems": [
+                {
+                  "maximum": 1,
+                  "minimum": 0,
+                  "type": "number"
+                },
+                {
+                  "maximum": 1,
+                  "minimum": 0,
+                  "type": "number"
+                },
+                {
+                  "maximum": 1,
+                  "minimum": 0,
+                  "type": "number"
+                },
+                {
+                  "maximum": 1,
+                  "minimum": 0,
+                  "type": "number"
+                }
+              ],
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Parent Bbox"
+        }
+      },
+      "required": [
+        "id",
+        "document_sha256",
+        "source_page",
+        "role",
+        "image_path",
+        "image_sha256",
+        "width",
+        "height"
+      ],
+      "title": "ExamPage",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "exam-intake-v1",
+      "default": "exam-intake-v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "exam_id": {
+      "title": "Exam Id",
+      "type": "string"
+    },
+    "student_id": {
+      "title": "Student Id",
+      "type": "string"
+    },
+    "is_synthetic_student": {
+      "default": false,
+      "title": "Is Synthetic Student",
+      "type": "boolean"
+    },
+    "expected_question_numbers": {
+      "items": {
+        "maximum": 300,
+        "minimum": 1,
+        "type": "integer"
+      },
+      "minItems": 1,
+      "title": "Expected Question Numbers",
+      "type": "array"
+    },
+    "materials": {
+      "items": {
+        "$ref": "#/$defs/ExamMaterial"
+      },
+      "minItems": 1,
+      "title": "Materials",
+      "type": "array"
+    },
+    "pages": {
+      "items": {
+        "$ref": "#/$defs/ExamPage"
+      },
+      "minItems": 1,
+      "title": "Pages",
+      "type": "array"
+    }
+  },
+  "required": [
+    "exam_id",
+    "student_id",
+    "expected_question_numbers",
+    "materials",
+    "pages"
+  ],
+  "title": "ExamIntake",
+  "type": "object"
+}

@@ -11,6 +11,13 @@ dependencies = [
   "Pillow>=11,<13",
   "lxml>=5,<7",
   "olefile>=0.47,<1",
+  "pypdfium2==5.14.0",
+  "fastapi>=0.115,<1",
+  "uvicorn>=0.34,<1",
+  "sqlalchemy>=2.0,<3",
+  "psycopg[binary]>=3.2,<4",
+  "python-multipart>=0.0.20,<1",
+  "celery[redis]>=5.5,<6",
 ]
 
 [dependency-groups]

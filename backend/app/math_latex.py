@@ -22,7 +22,7 @@ from app.latex_contracts import FormulaCatalog, FormulaConversion, validate_math
 from app.native_equation import extract_native_equation
 from app.semantic_bank import canonical_hash
 
-_CONVERTER = "mathtypejx@7f1b46358a3a7b0b5c992faa0dca91740a54efbb+strict-v1 (MIT)"
+_CONVERTER = "mathtypejx@7f1b46358a3a7b0b5c992faa0dca91740a54efbb+strict-v2 (MIT)"
 _PARSER_LOCK = threading.RLock()
 _NS = "http://www.w3.org/1998/Math/MathML"
 _MATHML_TAGS = frozenset(
@@ -432,23 +432,9 @@ def _strict_parse_mtef(mtef: bytes) -> etree._Element:
 
     xml = builder.build_mtef_xml(tree)
     mover.move(xml)
-    # The library lacks two plain Unicode mappings; those values are explicit
-    # Unicode characters in the native stream, so translate them without font
-    # heuristics. MT PUA and unknown font positions stay unsupported.
-    for char_node in list(xml.iter("char")):
-        code_text = char_node.findtext("mt_code_value") or ""
-        if code_text == "0x007C":
-            replacement = etree.Element("mo")
-            replacement.text = "|"
-        elif code_text == "0x00D7":
-            replacement = etree.Element("mo")
-            replacement.text = "×"
-        else:
-            continue
-        parent = char_node.getparent()
-        if parent is None:
-            raise FormulaSourceError("mtef_character_orphaned")
-        parent.replace(char_node, replacement)
+    # The pinned table lacks these explicit MTCode mappings. Font positions
+    # are not used to infer identity; private-use and unknown codes remain.
+    _replace_known_mtef_characters(xml)
     chars.replace(xml)
     if list(xml.iter("char")):
         raise FormulaSourceError("unmapped_mtef_character")
@@ -464,6 +450,25 @@ def _strict_parse_mtef(mtef: bytes) -> etree._Element:
     except Exception as exc:
         raise FormulaSourceError("mathml_transform_failed") from exc
     return root
+
+
+def _replace_known_mtef_characters(xml: etree._Element) -> None:
+    replacements = {
+        "0x007C": ("mo", "|"),
+        "0x00D7": ("mo", "×"),
+        "0x03C0": ("mi", "π"),
+    }
+    for char_node in list(xml.iter("char")):
+        spec = replacements.get(char_node.findtext("mt_code_value") or "")
+        if spec is None:
+            continue
+        tag, value = spec
+        replacement = etree.Element(tag)
+        replacement.text = value
+        parent = char_node.getparent()
+        if parent is None:
+            raise FormulaSourceError("mtef_character_orphaned")
+        parent.replace(char_node, replacement)
 
 
 def _validate_template_variation(record: dict[str, Any]) -> None:
@@ -519,29 +524,70 @@ def _validate_template_variation(record: dict[str, Any]) -> None:
 
 
 def _remove_known_bar_tail_markers(tree: dict[str, Any], walk) -> None:
-    """Drop only the EC07/EC08 glyph suffix on the exact double-fence bar template."""
+    """Normalize only confirmed fence glyphs in tmBAR's trailing pair slots.
+
+    MTEF carries COLOR and FULL records alongside template objects. The known
+    double-bar form has one body LINE, optional COLOR, optional FULL size, and
+    the ordered EC07/EC08 pair at the end. Other records or object slots stay
+    unsupported and the final private-use check rejects their glyphs.
+    """
     templates = [record for record in walk(tree) if record.get("type") == "tmpl"]
+    color_definitions = sum(1 for record in walk(tree) if record.get("type") == "color_def")
     for record in templates:
         objects = record.get("subobjects")
         if (
-            record.get("selector") == "tmBAR"
-            and record.get("variation_code") == 3
-            and isinstance(objects, list)
-            and len(objects) == 4
-            and objects[0].get("type") == "line"
-            and objects[1].get("type") == "size"
-            and objects[1].get("size_type") == 10
-            and objects[2].get("type") == "char"
-            and objects[2].get("mt_code_value") == "0xEC07"
-            and objects[2].get("typeface") == 22
-            and objects[3].get("type") == "char"
-            and objects[3].get("mt_code_value") == "0xEC08"
-            and objects[3].get("typeface") == 22
+            record.get("selector") != "tmBAR"
+            or record.get("variation_code") != 3
+            or record.get("template_specific_options") != 0
         ):
-            del objects[2:4]
+            continue
+        if not isinstance(objects, list) or len(objects) < 3:
+            continue
+        left, right = objects[-2:]
+        if not (_is_plain_bar_marker(left, "0xEC07") and _is_plain_bar_marker(right, "0xEC08")):
+            continue
+
+        prefix = objects[:-2]
+        kinds = [item.get("type") for item in prefix]
+        if kinds.count("line") != 1 or len(kinds) != len(set(kinds)):
+            continue
+        if any(kind not in {"line", "color", "size"} for kind in kinds):
+            continue
+        line_index = kinds.index("line")
+        line = prefix[line_index]
+        if not isinstance(line.get("objects"), list) or not line["objects"]:
+            continue
+        if "color" in kinds:
+            color = prefix[kinds.index("color")]
+            color_index = color.get("color_def_index")
+            if (
+                not isinstance(color_index, int)
+                or color_index < 0
+                or color_index > color_definitions
+            ):
+                continue
+        if "size" in kinds:
+            size = prefix[kinds.index("size")]
+            if size.get("size_type") != 10 or kinds.index("size") < line_index:
+                continue
+        if "color" in kinds and kinds.index("color") not in {0, line_index + 1}:
+            continue
+
+        del objects[-2:]
     for record in walk(tree):
         if record.get("type") == "char" and record.get("mt_code_value") in {"0xEC07", "0xEC08"}:
             raise FormulaSourceError("unmapped_private_mtef_character")
+
+
+def _is_plain_bar_marker(record: dict[str, Any], code: str) -> bool:
+    return (
+        record.get("type") == "char"
+        and record.get("mt_code_value") == code
+        and record.get("typeface") == 22
+        and record.get("variation") == "mathmode"
+        and record.get("options") == 0
+        and not record.get("embellishment_list")
+    )
 
 
 def convert_ole_formula(ole_bytes: bytes) -> FormulaConversion:

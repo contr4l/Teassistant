@@ -1,0 +1,160 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  backend:
+    name: Backend checks and real export tools
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.13"
+      - name: Install real PDF export tools
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            fontconfig fonts-noto-cjk libreoffice-writer pandoc texlive-lang-chinese texlive-xetex
+          fc-cache -f
+          xelatex --version
+          libreoffice --version
+          pandoc --version
+      - name: Install pinned uv and locked project groups
+        run: |
+          python -m pip install --disable-pip-version-check uv==0.9.9
+          uv sync --locked --group export --group dev
+      - name: Run backend lint and tests with export converters installed
+        env:
+          TEASSISTANT_SOFFICE: /usr/bin/libreoffice
+          TEASSISTANT_XELATEX: /usr/bin/xelatex
+        run: make check
+
+  frontend:
+    name: Frontend typecheck and build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+          package-manager-cache: false
+      - name: Activate locked pnpm
+        run: |
+          corepack enable
+          corepack prepare pnpm@10.4.1 --activate
+          pnpm --version
+      - name: Install and verify frontend
+        run: |
+          pnpm --dir frontend install --frozen-lockfile
+          pnpm --dir frontend typecheck
+          pnpm --dir frontend build
+
+  image:
+    name: Build and smoke linux/amd64 image
+    runs-on: ubuntu-24.04
+    needs: [backend, frontend]
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build local image
+        env:
+          IMAGE_TAG: teassistant-ci:${{ github.sha }}
+          SOURCE_REVISION: ${{ github.sha }}
+        run: docker build --platform linux/amd64 --build-arg "VCS_REF=$SOURCE_REVISION" --tag "$IMAGE_TAG" .
+      - name: Run isolated synthetic container smoke
+        env:
+          IMAGE_TAG: teassistant-ci:${{ github.sha }}
+        run: python3 scripts/container_smoke.py --image "$IMAGE_TAG" --report "$RUNNER_TEMP/container-smoke.json"
+
+  publish:
+    name: Rebuild, smoke and publish trusted GHCR image
+    runs-on: ubuntu-24.04
+    needs: [backend, frontend, image]
+    if: >-
+      (github.event_name == 'push' &&
+       (github.ref == format('refs/heads/{0}', github.event.repository.default_branch) ||
+        (startsWith(github.ref, 'refs/tags/v') && github.ref_protected))) ||
+      (github.event_name == 'workflow_dispatch' &&
+       github.ref == format('refs/heads/{0}', github.event.repository.default_branch))
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build trusted image
+        env:
+          IMAGE_TAG: teassistant-release:${{ github.sha }}
+          SOURCE_REVISION: ${{ github.sha }}
+        run: docker build --platform linux/amd64 --build-arg "VCS_REF=$SOURCE_REVISION" --tag "$IMAGE_TAG" .
+      - name: Repeat isolated smoke before registry access
+        env:
+          IMAGE_TAG: teassistant-release:${{ github.sha }}
+        run: python3 scripts/container_smoke.py --image "$IMAGE_TAG" --report "$RUNNER_TEMP/container-smoke-publish.json"
+      - name: Validate trusted release reference and prepare tags
+        id: tags
+        env:
+          GHCR_IMAGE: ghcr.io/${{ github.repository }}
+        shell: bash
+        run: |
+          image="$(printf '%s' "$GHCR_IMAGE" | tr '[:upper:]' '[:lower:]')"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+          if [[ "$GITHUB_EVENT_NAME" == "push" && "$GITHUB_REF" == refs/tags/* ]]; then
+            tag="$GITHUB_REF_NAME"
+            [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || exit 2
+            echo "release_tag=$tag" >> "$GITHUB_OUTPUT"
+          else
+            echo "release_tag=latest" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Log in to GHCR after checks and smoke passed
+        env:
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GHCR_USER" --password-stdin
+      - name: Push the smoke-tested local image
+        env:
+          LOCAL_IMAGE: teassistant-release:${{ github.sha }}
+          GHCR_IMAGE: ${{ steps.tags.outputs.image }}
+          RELEASE_TAG: ${{ steps.tags.outputs.release_tag }}
+        run: |
+          docker tag "$LOCAL_IMAGE" "$GHCR_IMAGE:$GITHUB_SHA"
+          docker push "$GHCR_IMAGE:$GITHUB_SHA"
+          if [[ "$RELEASE_TAG" != "latest" ]]; then
+            docker tag "$LOCAL_IMAGE" "$GHCR_IMAGE:$RELEASE_TAG"
+            docker push "$GHCR_IMAGE:$RELEASE_TAG"
+          else
+            docker tag "$LOCAL_IMAGE" "$GHCR_IMAGE:latest"
+            docker push "$GHCR_IMAGE:latest"
+          fi
+      - name: Write deployment reference
+        env:
+          GHCR_IMAGE: ${{ steps.tags.outputs.image }}
+        run: |
+          echo '## Deployment image' >> "$GITHUB_STEP_SUMMARY"
+          echo "TEASSISTANT_IMAGE=$GHCR_IMAGE:$GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
+          echo 'Validated architecture: linux/amd64. Update .env.deploy, then run deploy.py pull and deploy.py up.' >> "$GITHUB_STEP_SUMMARY"

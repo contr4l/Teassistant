@@ -1,0 +1,45 @@
+.usage-guide-dialog { position: fixed; inset: 0; width: min(760px, calc(100vw - 32px)); max-width: none; max-height: min(88dvh, 830px); margin: auto; padding: 0; overflow: hidden; border: 1px solid #e1e9e1; border-radius: 8px; color: #3e5146; background: #fbfcfa; box-shadow: 0 28px 90px rgba(15, 37, 25, .3); }
+.usage-guide-dialog::backdrop { background: rgba(22, 38, 30, .55); backdrop-filter: blur(3px); }
+.usage-guide-dialog[open] { display: block; }
+.usage-guide-shell { display: flex; max-height: min(88dvh, 830px); flex-direction: column; }
+.usage-guide-header { display: flex; flex: 0 0 auto; align-items: center; justify-content: space-between; gap: 14px; padding: 18px 22px; border-bottom: 1px solid #e9eee8; background: #fff; }
+.usage-guide-title-wrap { display: flex; align-items: center; gap: 11px; min-width: 0; }
+.usage-guide-header h2 { margin: 3px 0 0; color: #2c4135; font-size: 20px; font-weight: 650; }
+.usage-guide-close { display: grid; flex: 0 0 auto; place-items: center; width: 35px; height: 35px; border: 1px solid #e5ebe5; border-radius: 8px; color: #637169; background: #fff; cursor: pointer; }
+.usage-guide-close:hover { color: #355b46; background: #f2f7f2; }
+.usage-guide-body { min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 18px 22px 20px; }
+.usage-guide-steps { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin: 0; padding: 0; list-style: none; }
+.usage-guide-step { display: flex; align-items: flex-start; gap: 11px; min-width: 0; padding: 14px; border: 1px solid #e8eee8; border-radius: 8px; background: #fff; }
+.usage-guide-step-copy { min-width: 0; }
+.usage-guide-step h3 { margin: 4px 0 5px; color: #42574a; font-size: 12px; line-height: 1.45; }
+.usage-guide-step p { margin: 0; color: #65706a; font-size: 13px; line-height: 1.75; }
+.usage-guide-tip { display: flex; align-items: flex-start; gap: 8px; margin-top: 12px; padding: 11px 12px; border: 1px solid #e5ede5; border-radius: 8px; color: #5f7365; background: #f4f8f4; }
+.usage-guide-tip p { margin: 0; font-size: 13px; line-height: 1.7; }
+.usage-guide-footer { display: flex; flex: 0 0 auto; align-items: center; justify-content: space-between; gap: 12px; padding: 13px 22px; border-top: 1px solid #e9eee8; background: #fff; }
+.usage-guide-footer-label { color: #676f69; font-size: 12px; white-space: nowrap; }
+.usage-guide-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 7px; }
+.usage-guide-actions button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 34px; padding: 0 10px; border: 1px solid #dfe8e0; border-radius: 8px; color: #4c7058; background: #f8fbf8; font-size: 12px; font-weight: 600; cursor: pointer; }
+.usage-guide-actions button:hover { border-color: #bfd3c2; color: #315943; background: #eff6f0; }
+.usage-guide-dialog button:focus-visible { outline: 3px solid rgba(83, 139, 96, .4); outline-offset: 2px; }
+@media (max-width: 600px) {
+.usage-guide-dialog { width: calc(100vw - 20px); max-height: min(92dvh, 900px); border-radius: 8px; }
+.usage-guide-shell { max-height: min(92dvh, 900px); }
+.usage-guide-header { padding: 14px 15px; }
+.usage-guide-body { padding: 14px 14px 16px; }
+.usage-guide-steps { grid-template-columns: 1fr; gap: 8px; }
+.usage-guide-step { padding: 12px; }
+.usage-guide-footer { align-items: stretch; flex-direction: column; gap: 8px; padding: 11px 14px calc(11px + env(safe-area-inset-bottom)); }
+.usage-guide-actions { display: grid; grid-template-columns: 1fr; }
+.usage-guide-actions button { justify-content: space-between; min-height: 38px; padding: 0 11px; font-size: 13px; }
+
+
+}
+
+
+.usage-guide-header h2 { margin: 0; font-size: 18px; }
+.usage-guide-step-no { display: inline-grid; flex: 0 0 auto; place-items: center; width: 24px; height: 24px; border-radius: 50%; color: #fff; background: #244f42; font-size: 13px; font-weight: 600; }
+.usage-guide-step h3 { font-size: 15px; }
+.usage-guide-step p { font-size: 14px; color: #4f5c55; }
+.usage-guide-tip { display: block; margin: 12px 0 0; font-size: 13px; }
+.usage-guide-actions button { font-size: 14px; }
+.usage-guide-footer-label { font-size: 13px; color: #5f6b64; }

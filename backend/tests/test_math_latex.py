@@ -5,6 +5,8 @@ from app.latex_contracts import FormulaCatalog, FormulaConversion
 from app.math_latex import (
     FormulaSourceError,
     _convert_mathml,
+    _remove_known_bar_tail_markers,
+    _replace_known_mtef_characters,
     _validate_template_variation,
     convert_ole_formula,
     convert_omml_formula,
@@ -78,6 +80,128 @@ def test_unknown_template_variation_bits_are_not_ignored() -> None:
         assert exc.code == "unknown_mtef_template_variation"
     else:
         raise AssertionError("unknown fraction variation was accepted")
+
+
+def _walk_records(value):
+    if isinstance(value, dict):
+        yield value
+        for child in value.values():
+            yield from _walk_records(child)
+    elif isinstance(value, list):
+        for child in value:
+            yield from _walk_records(child)
+
+
+def _bar_record(prefix):
+    return {
+        "type": "tmpl",
+        "options": 0,
+        "selector": "tmBAR",
+        "variation_code": 3,
+        "template_specific_options": 0,
+        "subobjects": [
+            *[
+                {"type": "line", "objects": [{"type": "char", "mt_code_value": "0x0078"}]}
+                if item.get("type") == "line"
+                else item
+                for item in prefix
+            ],
+            {
+                "type": "char",
+                "options": 0,
+                "variation": "mathmode",
+                "typeface": 22,
+                "mt_code_value": "0xEC07",
+            },
+            {
+                "type": "char",
+                "options": 0,
+                "variation": "mathmode",
+                "typeface": 22,
+                "mt_code_value": "0xEC08",
+            },
+        ],
+    }
+
+
+@pytest.mark.parametrize(
+    "prefix",
+    [
+        [{"type": "line"}],
+        [{"type": "line"}, {"type": "color", "color_def_index": 0}],
+        [
+            {"type": "color", "color_def_index": 1},
+            {"type": "line"},
+            {"type": "size", "size_type": 10},
+        ],
+        [
+            {"type": "line"},
+            {"type": "color", "color_def_index": 0},
+            {"type": "size", "size_type": 10},
+        ],
+    ],
+)
+def test_exact_double_bar_tail_normalizes_only_known_control_layouts(prefix) -> None:
+    tree = {"equation": _bar_record(prefix), "color_defs": [{"type": "color_def"}]}
+
+    _remove_known_bar_tail_markers(tree, _walk_records)
+
+    assert len(tree["equation"]["subobjects"]) == len(prefix)
+    assert not any(
+        item.get("mt_code_value") in {"0xEC07", "0xEC08"} for item in tree["equation"]["subobjects"]
+    )
+
+
+@pytest.mark.parametrize(
+    "record",
+    [
+        _bar_record([{"type": "line"}, {"type": "color", "color_def_index": 9}]),
+        _bar_record([{"type": "size", "size_type": 10}, {"type": "line"}]),
+        _bar_record([{"type": "line"}, {"type": "size", "size_type": 9}]),
+        _bar_record([{"type": "line"}, {"type": "unknown"}]),
+        _bar_record([{"type": "line"}, {"type": "line"}]),
+    ],
+)
+def test_bar_tail_with_invalid_controls_or_extra_slots_is_not_removed(record) -> None:
+    tree = {"equation": record}
+
+    with pytest.raises(FormulaSourceError, match="unmapped_private_mtef_character"):
+        _remove_known_bar_tail_markers(tree, _walk_records)
+
+
+def test_bar_tail_with_specific_options_or_marker_embellishment_is_not_removed() -> None:
+    for record in (
+        {**_bar_record([{"type": "line"}]), "template_specific_options": 1},
+        _bar_record([{"type": "line"}]),
+    ):
+        if record["subobjects"][-1]["mt_code_value"] == "0xEC08":
+            record["subobjects"][-1]["embellishment_list"] = [{"type": "embell"}]
+        with pytest.raises(FormulaSourceError, match="unmapped_private_mtef_character"):
+            _remove_known_bar_tail_markers({"equation": record}, _walk_records)
+
+
+def test_known_mtef_mtcode_pi_maps_to_identifier_without_font_position_guessing() -> None:
+    xml = etree.fromstring(
+        b"<root><char><typeface>4</typeface><mt_code_value>0x03C0</mt_code_value>"
+        b"<font_position>112</font_position></char></root>"
+    )
+
+    _replace_known_mtef_characters(xml)
+
+    assert [(node.tag, node.text) for node in xml] == [("mi", "π")]
+
+
+def test_font_position_without_mtcode_and_unknown_mtef_code_are_not_inferred() -> None:
+    xml = etree.fromstring(
+        b"<root><char><typeface>4</typeface><font_position>112</font_position></char>"
+        b"<char><typeface>4</typeface><mt_code_value>0xE111</mt_code_value>"
+        b"<font_position>112</font_position></char></root>"
+    )
+
+    _replace_known_mtef_characters(xml)
+
+    assert [node.tag for node in xml] == ["char", "char"]
+    assert [node.findtext("mt_code_value") for node in xml] == [None, "0xE111"]
 
 
 def test_unknown_or_non_cfb_ole_is_explicit_unsupported() -> None:

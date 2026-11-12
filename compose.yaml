@@ -1,0 +1,95 @@
+name: ${COMPOSE_PROJECT_NAME:-teassistant}
+
+x-application: &application
+  image: ${TEASSISTANT_IMAGE:-teassistant:local}
+  build:
+    context: .
+  restart: unless-stopped
+  environment:
+    TEASSISTANT_DATABASE_URL: postgresql+psycopg://teassistant:${TEASSISTANT_DB_PASSWORD:?Run python3 scripts/deploy.py init first}@postgres:5432/teassistant
+    TEASSISTANT_DATA_DIR: /app/work/web/private
+    TEASSISTANT_FRONTEND_DIST: /app/frontend/dist
+    TEASSISTANT_CURRICULUM: ${TEASSISTANT_CURRICULUM:-/app/data/curricula/junior-math-2022-draft-v2.json}
+    TEASSISTANT_BANK_DIR: ${TEASSISTANT_BANK_DIR:-}
+    TEASSISTANT_SEMANTIC_DIR: ${TEASSISTANT_SEMANTIC_DIR:-}
+    TEASSISTANT_SECURE_COOKIES: ${TEASSISTANT_SECURE_COOKIES:-0}
+    TEASSISTANT_MODEL_PROVIDER: deepseek
+    TEASSISTANT_ALLOW_CODEX: "0"
+    DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+    DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-flash}
+    DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
+    TEASSISTANT_SOFFICE: /usr/bin/libreoffice
+    TEASSISTANT_XELATEX: /usr/bin/xelatex
+  volumes:
+    - private_data:/app/work
+    - type: bind
+      source: ${TEASSISTANT_HOST_BANK_ROOT:-./runtime/bank}
+      target: /bank
+      read_only: true
+      bind:
+        create_host_path: false
+  security_opt:
+    - no-new-privileges:true
+  logging:
+    driver: json-file
+    options:
+      max-size: 10m
+      max-file: "3"
+
+services:
+  postgres:
+    image: postgres:17-bookworm
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: teassistant
+      POSTGRES_USER: teassistant
+      POSTGRES_PASSWORD: ${TEASSISTANT_DB_PASSWORD:?Run python3 scripts/deploy.py init first}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U teassistant -d teassistant"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  init:
+    <<: *application
+    restart: "no"
+    command: [/app/.venv/bin/python, /app/scripts/manage_web.py, init]
+    healthcheck:
+      disable: true
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    <<: *application
+    ports:
+      - "${TEASSISTANT_BIND:-127.0.0.1}:${TEASSISTANT_PORT:-8000}:8000"
+    healthcheck:
+      test: [CMD, /app/.venv/bin/python, /app/scripts/container_healthcheck.py, --role, api]
+      interval: 15s
+      timeout: 10s
+      start_period: 30s
+      retries: 5
+    depends_on:
+      init:
+        condition: service_completed_successfully
+
+  worker:
+    <<: *application
+    command: [/app/.venv/bin/python, /app/scripts/run_web_worker.py]
+    stop_grace_period: 90s
+    healthcheck:
+      test: [CMD, /app/.venv/bin/python, /app/scripts/container_healthcheck.py, --role, worker]
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      retries: 5
+    depends_on:
+      init:
+        condition: service_completed_successfully
+
+volumes:
+  postgres_data:
+  private_data:

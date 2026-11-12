@@ -4,7 +4,7 @@
 
 首期交付形态为 **手机网页上传＋桌面网页备课**。手机拍照上传材料，电脑完成分析修正、组卷与导出；全流程手机备课、小程序和原生 App 暂不纳入。
 
-当前处于 P0 离线基础阶段，包含数据合同、组卷规则、单题模型适配与评测工具、数学导出原型，以及已实测的 DOCX 本地来源题库。DeepSeek API 是唯一生产模型 Provider；Codex CLI 仅供开发者快速验证。真实学生作答识别和模型质量尚未验证，不代表 MVP 已完成。
+当前已实现本地题库、组卷和数学导出、学生考卷分析，以及教师与管理员网页。网页覆盖登录、学生与进度、考试上传、分析报告、组卷预览、下载和反馈；管理员可编辑六个阶段的提示词并回滚。学生分析已用一份真实手写答卷通过 Codex CLI 试跑，尚未完成系统性的识别准确率与教师价值验证。DeepSeek API 是唯一生产模型 Provider；Codex CLI 仅供开发者显式快速验证。本地检查不代表生产部署或完整 MVP 已验收。
 
 ## 项目文档
 
@@ -24,6 +24,28 @@
 - [DOCX 题库独立验收](docs/acceptance/docx-bank-review.md)：本批真实来源、公式图片及导入完整性检查。
 - [真实题库本地组卷与导出](docs/bank-practice.md)：库存、学生进度、默认/进阶配额、原生 Word 与 PDF 的开发验证入口。
 - [试卷专用版式](docs/exam-layout.md)：同题单作答版/紧凑版、教师答案模板及排版比较命令。
+- [学生考卷与学情分析](docs/exam-analysis.md)：材料处理、手写识别、题答关联、局部修正、近期考试汇总及私有报告入口。
+- [教师网页与提示词管理](docs/web-application.md)：本地启动、初始化管理员、持久任务、手机上传及单服务器部署。
+- [管理员模型与累计额度](docs/admin-model-billing.md)：网页设置 DeepSeek、昨日用户估算排行、追加额度与未知预占核实。
+
+## Docker 单机部署
+
+ROCK 5B（ARM64）环境确认、板上原生构建和预设管理员/教师账号见 [ROCK 5B 部署指南](docs/rock5b-deployment.md)。准备私有配置与账号文件后可运行 `python3 scripts/deploy.py bootstrap --build --accounts-file .accounts.deploy.json`；不将当前amd64流水线或未推送工作区称为板上已验证版本。
+
+服务器准备 Docker Engine、Compose v2 和 Python 3（仅标准库），不需要在宿主机安装 Node、uv、中文字体或 LaTeX。部署配置与开发配置分开：
+
+```bash
+python3 scripts/deploy.py init
+# 编辑 .env.deploy；DeepSeek 密钥可启动后在管理员网页填写，题库可后续挂载。
+python3 scripts/deploy.py up --build
+python3 scripts/deploy.py admin --username your-admin
+```
+
+初始化自动生成私有数据库密码，拒绝覆盖已有配置。默认访问 `http://127.0.0.1:8000`；API、独立 Worker 和 PostgreSQL 使用持久数据卷。管理员密码通过终端交互输入。缺密钥或题库仍可先建立账号和学生档案，相应识别与组卷功能保持不可用。
+
+GitHub Actions 配置执行后端测试、前端构建、镜像构建及容器合成冒烟，受信默认分支/版本标签通过检查后可发布 GHCR 镜像；PR 不发布。镜像发布后可在 `.env.deploy` 指定镜像标签或摘要，再运行 `python3 scripts/deploy.py pull` 和 `python3 scripts/deploy.py up`，无需服务器重新构建。
+
+完整配置、题库挂载、HTTPS、备份、更新与回退见 [部署指南](docs/deployment.md)。本机容器检查与远程 Actions/实际服务器验收分别记录，不能混作已部署。
 
 ## 离线开发
 
@@ -32,6 +54,8 @@
 ```bash
 make setup
 make check
+make setup-web
+make check-web
 make schemas
 make selection
 make evaluate
@@ -50,7 +74,7 @@ make evaluate
 
 ### 单题模型快速验证
 
-生产业务模型只有 DeepSeek API；Codex CLI 仅供开发者快速验证，复用登录但不加载用户 `config.toml`，使用所选或默认模型服务，不是本地推理或生产 Provider。两种路径都要显式选择，不会自动互相回退。真实卷面和识别质量尚未验证。
+生产业务模型只有 DeepSeek API；Codex CLI 仅供开发者快速验证，复用登录但不加载用户 `config.toml`，使用所选或默认模型服务，不是本地推理或生产 Provider。两种路径都要显式选择，不会自动互相回退。学生考卷入口要求显式指定 Codex 模型；一次真实试跑不构成总体识别质量结论。
 
 配置项、命令和输入限制见[单题模型快速验证](docs/model-validation.md)。
 

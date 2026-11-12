@@ -60,6 +60,29 @@ def _safe_path(root: Path, relative: str) -> Path:
     return result
 
 
+def _resolve_source_run_path(semantic_root: Path, value: Any) -> Path:
+    """Resolve legacy absolute or package-relative run paths without escapes."""
+    if not isinstance(value, str) or not value or "\\" in value:
+        raise ValueError("unsafe semantic run path")
+    base = semantic_root.parent.resolve(strict=True)
+    supplied = Path(value)
+    if supplied.is_absolute():
+        candidate = supplied
+    else:
+        pure = PurePosixPath(value)
+        if pure.is_absolute() or any(part in {"", ".", ".."} for part in pure.parts):
+            raise ValueError("unsafe semantic run path")
+        candidate = base.joinpath(*pure.parts)
+    resolved = candidate.resolve(strict=True)
+    try:
+        resolved.relative_to(base)
+    except ValueError:
+        raise ValueError("semantic run path escapes its root") from None
+    if not resolved.is_dir():
+        raise ValueError("semantic run path is not a directory")
+    return resolved
+
+
 def _safe_zip_part(part: Any) -> str:
     if not isinstance(part, str) or "\\" in part:
         raise ValueError("unsafe source package part")
@@ -283,8 +306,7 @@ def _annotation_reasons(
 
     provenance = row.get("provenance")
     try:
-        source_run_path = Path(provenance["source_run_path"]).resolve(strict=True)
-        source_run_path.relative_to(semantic_root.parent.resolve(strict=True))
+        source_run_path = _resolve_source_run_path(semantic_root, provenance["source_run_path"])
         run_path = (source_run_path / "run.json").resolve(strict=True)
         run_path.relative_to(semantic_root.parent.resolve(strict=True))
         source_run, _ = _read_json(run_path)

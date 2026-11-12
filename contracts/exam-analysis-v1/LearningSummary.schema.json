@@ -1,0 +1,171 @@
+{
+  "$defs": {
+    "ExamEvidence": {
+      "additionalProperties": false,
+      "properties": {
+        "page_id": {
+          "title": "Page Id",
+          "type": "string"
+        },
+        "bbox": {
+          "maxItems": 4,
+          "minItems": 4,
+          "prefixItems": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            }
+          ],
+          "title": "Bbox",
+          "type": "array"
+        },
+        "kind": {
+          "enum": [
+            "printed_question",
+            "handwriting",
+            "grading",
+            "reference",
+            "header"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "excerpt": {
+          "default": "",
+          "title": "Excerpt",
+          "type": "string"
+        }
+      },
+      "required": [
+        "page_id",
+        "bbox",
+        "kind"
+      ],
+      "title": "ExamEvidence",
+      "type": "object"
+    },
+    "LearningPointSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "point_id": {
+          "title": "Point Id",
+          "type": "string"
+        },
+        "observed_question_count": {
+          "title": "Observed Question Count",
+          "type": "integer"
+        },
+        "error_question_count": {
+          "title": "Error Question Count",
+          "type": "integer"
+        },
+        "exam_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Exam Ids",
+          "type": "array"
+        },
+        "evidence": {
+          "items": {
+            "$ref": "#/$defs/ExamEvidence"
+          },
+          "title": "Evidence",
+          "type": "array"
+        },
+        "interpretation": {
+          "const": "practice_signal_only",
+          "default": "practice_signal_only",
+          "title": "Interpretation",
+          "type": "string"
+        }
+      },
+      "required": [
+        "point_id",
+        "observed_question_count",
+        "error_question_count",
+        "exam_ids",
+        "evidence"
+      ],
+      "title": "LearningPointSummary",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "learning-summary-v1",
+      "default": "learning-summary-v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "student_id": {
+      "title": "Student Id",
+      "type": "string"
+    },
+    "curriculum_version": {
+      "title": "Curriculum Version",
+      "type": "string"
+    },
+    "selected_exam_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Selected Exam Ids",
+      "type": "array"
+    },
+    "requested_exam_count": {
+      "default": 3,
+      "title": "Requested Exam Count",
+      "type": "integer"
+    },
+    "actual_exam_count": {
+      "title": "Actual Exam Count",
+      "type": "integer"
+    },
+    "points": {
+      "items": {
+        "$ref": "#/$defs/LearningPointSummary"
+      },
+      "title": "Points",
+      "type": "array"
+    },
+    "unresolved_question_count": {
+      "title": "Unresolved Question Count",
+      "type": "integer"
+    },
+    "warnings": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Warnings",
+      "type": "array"
+    }
+  },
+  "required": [
+    "student_id",
+    "curriculum_version",
+    "selected_exam_ids",
+    "actual_exam_count",
+    "points",
+    "unresolved_question_count"
+  ],
+  "title": "LearningSummary",
+  "type": "object"
+}

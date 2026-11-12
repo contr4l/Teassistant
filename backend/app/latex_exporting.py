@@ -769,7 +769,10 @@ def _document_tex(
             subquestions = min(_subquestion_count(stem_blocks), 6)
             lines = 7 + 3 * (subquestions - 1)
             parts.append(
-                "\\vspace{2mm}\\begin{minipage}{\\linewidth}"
+                # Keep the last stem line with its answer area. A bare
+                # vertical skip allows a short stem to orphan at the footer.
+                "\\par\\nopagebreak[4]\\vspace{2mm}\\nopagebreak[4]"
+                "\\begin{minipage}{\\linewidth}"
                 "\\begingroup\\setlength{\\parskip}{0pt}\n"
             )
             for _ in range(lines):
@@ -1024,7 +1027,7 @@ def export_latex_snapshot(
             "formula_catalog_snapshot_id": formula_catalog.snapshot_id,
             "formula_catalog_bank_sha256": formula_catalog.bank_sha256,
             "layout": layout,
-            "template_version": "latex-exam-v1",
+            "template_version": "latex-exam-v2",
             "teacher_content": "answers_and_solutions",
             "curriculum_version": curriculum.version,
             "current_progress_revision": current_progress.revision,

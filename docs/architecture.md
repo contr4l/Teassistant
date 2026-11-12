@@ -77,6 +77,24 @@ flowchart TB
 
 学生试卷及 AI 作答分析不自动回流共享题库。共享题库来自运营上传的教学资料，学生材料与题库材料分别管理。
 
+本地学生分析开发路径采用独立 exam-analysis-v1 合同：exam_intake 保存原件、完整 PDF 渲染和可逆裁剪；exam_models 显式调用 DeepSeek 或开发用 Codex；exam_analysis 负责关联、评分证据、诊断约束、修正版本及实际考试去重；exam_view 输出私有离线对照报告。analyze_student_exam.py 提供 prepare/run/correct/summary，模型原始输出与老师修正分开，不能凭模型自报或整卷总分填造逐题状态。Schema 在 contracts/exam-analysis-v1；实际边界见 [学生考卷分析](exam-analysis.md)。这条 CLI 路径不表示账号、Web API 或持久 Worker 已交付。
+
+## 教师网页闭环补充 2026-11-12
+
+用户新增管理员调整关键提示词，并启动教师登录、学生与进度、考试上传、分析、组卷和反馈网页开发。React/TypeScript 前端与 FastAPI 同源部署，服务端数据库保存密码摘要、会话、归属记录、任务及提示词历史。原件、分析页与导出仅通过会话及 owner 校验后下载，不使用公开静态私有目录。
+
+SQLAlchemy 支持生产 PostgreSQL 和显式本地 SQLite。独立 Worker 读取持久任务、续租并恢复过期执行，API不承载长任务。单机 Compose 默认直接运行数据库任务 Worker，init 完成初始化后才启动 API/Worker，减少首次部署依赖；Celery/Redis 唤醒代码保留为可选扩展，不是默认部署的必需服务。任务结果与业务指针在同一事务内通过租约、资源版本和学生/考试版本检查后发布，旧 Worker 不覆盖新状态。
+
+prompt_templates 保存初始六段任务说明，数据库保存管理员编辑版本，提交任务时固定正文与摘要。teacher_report 是独立的结构化模型输出，再由网页渲染；公共约束、Schema、进度、配额和去重不属于可编辑提示词。模块与本批边界以 [网页闭环合同](acceptance/web-loop-v1-contract.md) 为准；启动方法见 [网页应用](web-application.md)。实际生产数据库、Redis、域名HTTPS与教师试用需分别验证。
+
+## 管理员模型与额度补充 2026-11-12
+
+`model_settings.py` 将管理员密钥和费率保存在共享私有数据目录，API/Worker 使用同一配置；密钥写入后不回显。`model_billing.py` 与业务 Store 共用数据库、独立表，保存累计钱包、每次 HTTP 尝试及追加审计。金额采用整数微元，增加额度、预占、结算与核实具有事务和幂等约束。默认新账号10元可由管理员调整，配置在数据库持久化；创建用户与初始钱包/发放事件同事务，不在读取钱包时补额，旧用户保持原余额。SQLite 使用写事务；生产 PostgreSQL 路径使用数据库锁及条件更新，仍需真实 PostgreSQL 集成验证。
+
+`model_runtime.py` 将所有网页 DeepSeek 分析及报告 HTTP 请求包装为额度预占→实际请求→用量结算。主分析 CLI 子进程通过内部 owner/job/租约上下文连接同一账本，缺上下文时拒绝绕过。业务 JSON 无效但 usage 有效仍计费；超时、未知用量及崩溃预占保留待核实。Codex 开发通路不产生 DeepSeek 费用。
+
+配置在模型处理单元创建适配器时冻结，当前处理及其重试保持该版本，后续处理读取新配置；不是每次 HTTP 自动热切换。昨日采用北京时间自然日，返回已知小计、未知数、预占及采集覆盖，固定单价估算不冒称官方账单。详见 [操作指南](admin-model-billing.md) 与 [合同](acceptance/admin-billing-v1-contract.md)。
+
 ## 5 题目与证据结构
 
 题目以完整大题为存储和抽取单位，内部保留有序小问。目标内容包括段落、公式、图片、表格和小问；保存公式语义表示时仍保留其源对象及预览，几何图形不要求 AI 重绘。DOCX 优先读取 OOXML，按 VML/EMU 显示尺寸保留预览，不以缺公式的纯文字作为完整识别结果。
@@ -165,3 +183,5 @@ Teassistant/
 试卷版式由 `print_layout.py` 与 `templates/exam-print-v1/` 管理空白Word样式，学生支持answer_space/compact，教师只取answer+analysis作用域。`source-practice-export-v2` 记录版式及模板版本，保持原snapshot_id；对短提示+单大型MathType采用展示公式段，保留原生字节与尺寸，普通混排不重写。`export_practice_layouts.py` 从同一冻结题单生成两个布局后原子发布，变化的进度或失败转换不能留下半套比较文件。最终版面以实际PDF逐页验收，不能由样式/XML或合成响应推导老师满意；见 `exam-layout.md`。
 
 LaTeX PDF 为独立来源导出路径：`latex_contracts.py` 将公式目录绑定原生对象完整哈希和选题快照；`math_latex.py` 严格解析支持的 MTEF/OMML 数学结构并转换为数学 LaTeX；`latex_exporting.py` 排版文本、表格与原几何图并实际调用 XeLaTeX。禁止原公式预览代替本路径的数学结构，未知记录、字符或编译缺字须失败。`export_latex_practice.py` 对同一快照生成两种版式并整体原子发布；原 Word 路径保持独立。工具安装、覆盖范围及实际证据见 `latex-export.md`。
+
+部署题库由 `package_question_bank.py` 生成自包含source/semantic/evidence及manifest：副本provenance可使用相对包根（semantic目录的父级）的run路径，限制在根内，仍逐call核对原始SHA及结果，原绝对同根路径兼容。打包检查assessed证据完整、目标不覆盖/不写输入或引用run内，原/新逐题可用状态原因一致后发布，不能通过原新同样损坏来绕过验真。首次本地部署及下载元数据修复见 `acceptance/local-deployment-v1-execution.md`。
