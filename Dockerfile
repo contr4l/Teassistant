@@ -27,6 +27,7 @@ RUN apt-get update \
         chromium \
         fontconfig \
         fonts-noto-cjk \
+        libatomic1 \
         libreoffice-writer \
         texlive-fonts-recommended \
         texlive-lang-chinese \
@@ -37,6 +38,8 @@ RUN apt-get update \
 
 WORKDIR /app
 COPY --from=python-dependencies /app/.venv /app/.venv
+RUN /app/.venv/bin/python -c 'import importlib.util, pathlib, subprocess; driver = pathlib.Path(importlib.util.find_spec("playwright").origin).parent / "driver" / "node"; subprocess.run([str(driver), "--version"], check=True)' \
+    && chromium --version
 COPY --chown=0:0 backend ./backend
 COPY --chown=0:0 scripts ./scripts
 COPY --chown=0:0 data ./data
