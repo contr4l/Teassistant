@@ -31,6 +31,7 @@ def test_temporary_compose_is_isolated_and_has_no_model_or_host_data_mounts(tmp_
     )
     assert config.count('image: "ghcr.io/example/teassistant:smoke"') == 3
     assert "internal: true" in config
+    assert "ports:" not in config
     assert 'DEEPSEEK_API_KEY: ""' in config
     assert 'TEASSISTANT_ALLOW_CODEX: "0"' in config
     assert "evals/private" not in config
@@ -48,6 +49,82 @@ def test_generated_upload_is_valid_synthetic_png():
     assert image.format == "PNG"
     assert image.size == (1, 1)
     image.verify()
+
+
+def test_internal_http_client_runs_real_routes_store_and_no_key_worker(tmp_path, monkeypatch):
+    import urllib.error
+    from urllib.parse import urlsplit
+
+    from app.web_api import create_app
+    from app.web_jobs import run_once
+    from app.web_settings import WebSettings
+    from app.web_store import Store
+    from fastapi.testclient import TestClient
+
+    front = tmp_path / "frontend"
+    front.mkdir()
+    (front / "index.html").write_text("<html>synthetic smoke</html>")
+    config = {
+        "TEASSISTANT_DATABASE_URL": f"sqlite:///{tmp_path / 'synthetic.db'}",
+        "TEASSISTANT_DATA_DIR": str(tmp_path / "private"),
+        "TEASSISTANT_CURRICULUM": str(ROOT / "data/curricula/junior-math-2022-draft-v2.json"),
+        "TEASSISTANT_FRONTEND_DIST": str(front),
+        "TEASSISTANT_MODEL_PROVIDER": "deepseek",
+        "TEASSISTANT_ALLOW_CODEX": "0",
+        "DEEPSEEK_API_KEY": "",
+    }
+    for key, value in config.items():
+        monkeypatch.setenv(key, value)
+    settings = WebSettings.from_env()
+    store = Store(settings.database_url)
+    store.init()
+    owner = store.create_user("synthetic-smoke", "synthetic-only-password", "合成管理员", "admin")
+    dispatched = []
+
+    class Reply:
+        def __init__(self, response):
+            self.status = response.status_code
+            self.content = response.content
+
+        def read(self):
+            return self.content
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    with TestClient(create_app(settings=settings, store=store)) as client:
+        class Opener:
+            def open(self, request, timeout=None):
+                url = request if isinstance(request, str) else request.full_url
+                parsed = urlsplit(url)
+                assert parsed.scheme == "http" and parsed.netloc == "127.0.0.1:8000"
+                if parsed.path.startswith("/api/jobs/"):
+                    dispatched.append(run_once(store, settings, "synthetic-offline-worker"))
+                method = "GET" if isinstance(request, str) else request.get_method()
+                headers = {} if isinstance(request, str) else dict(request.header_items())
+                content = None if isinstance(request, str) else request.data
+                response = client.request(method, parsed.path, headers=headers, content=content)
+                if response.status_code >= 400:
+                    raise urllib.error.HTTPError(url, response.status_code, "synthetic", {}, None)
+                return Reply(response)
+
+        monkeypatch.setattr(smoke.urllib.request, "build_opener", lambda *_args: Opener())
+        monkeypatch.setattr(smoke.time, "sleep", lambda _seconds: None)
+        report = smoke._api_smoke_client(30, "synthetic-smoke", "synthetic-only-password")
+
+    assert report["uploaded_synthetic_assets"] == 2
+    assert report["queued_job_worker_terminal_status"] == "failed"
+    assert report["feedback_write_read"] == "passed"
+    assert any(dispatched)
+    practices = store.list_records("practice", owner["id"])
+    assert len(practices) == 1
+    assert practices[0]["data"]["snapshot"]["is_synthetic"] is True
+    feedbacks = store.list_records("feedback", owner["id"], parent_id=practices[0]["id"])
+    assert len(feedbacks) == 1 and feedbacks[0]["data"]["quality"] == 3
+    store.close()
 
 
 def test_chromium_failure_blocks_smoke_report_and_cleans_disposable_stack(tmp_path, monkeypatch):

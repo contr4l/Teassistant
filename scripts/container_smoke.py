@@ -40,6 +40,11 @@ _COMMAND_ERROR_MARKERS = (
     "FileNotFoundError", "AssertionError", "ValueError", "KeyError",
     "OperationalError", "IntegrityError", "ProgrammingError",
 )
+_CLIENT_ERROR_TYPES = frozenset({
+    "KeyError", "OSError", "RuntimeError", "StoreConflict", "StoreError",
+    "StoreNotFound", "TimeoutError", "TypeError", "URLError", "ValueError",
+    "ProtocolError", "OtherError",
+})
 
 
 class SmokeCommandError(RuntimeError):
@@ -47,6 +52,15 @@ class SmokeCommandError(RuntimeError):
         self.exit_code = exit_code
         self.markers = tuple(marker for marker in _COMMAND_ERROR_MARKERS if marker in markers)
         super().__init__(f"container smoke command failed (exit {exit_code})")
+
+
+class SmokeClientError(RuntimeError):
+    """Safe, fixed diagnostics returned by the in-container HTTP client."""
+
+    def __init__(self, error_type: str, hint: str | None = None):
+        self.error_type = error_type if error_type in _CLIENT_ERROR_TYPES else "OtherError"
+        self.hint = hint if hint in _SAFE_FAILURE_HINTS else None
+        super().__init__(self.error_type)
 
 
 class SmokeStageError(RuntimeError):
@@ -58,6 +72,10 @@ class SmokeStageError(RuntimeError):
             self.summary += f"; exit={error.exit_code}"
             if error.markers:
                 self.summary += f"; markers={','.join(error.markers)}"
+        elif isinstance(error, SmokeClientError):
+            self.summary = f"stage={stage}; error={error.error_type}"
+            if error.hint:
+                self.summary += f"; hint={error.hint}"
         elif type(error) is RuntimeError and str(error) in _SAFE_FAILURE_HINTS:
             self.summary += f"; hint={error}"
         super().__init__(self.summary)
@@ -125,8 +143,6 @@ def _compose_text(image: str, share: Path, db_password: str) -> str:
     volumes:
       - smoke_data:/app/work
       - {share_yaml}
-    ports:
-      - "127.0.0.1::8000"
     depends_on:
       init:
         condition: service_completed_successfully
@@ -266,56 +282,151 @@ def _wait_api(opener: urllib.request.OpenerDirector, base_url: str, timeout: int
     raise RuntimeError("container API did not become ready")
 
 
-def _seed_completed_synthetic_practice(
-    compose: list[str], owner_id: str, student_id: str, revision: int
-) -> str:
-    code = """import json,sys
-from app.web_settings import WebSettings
-from app.web_store import Store
-payload=json.load(sys.stdin)
-settings=WebSettings.from_env()
-store=Store(settings.database_url)
-try:
- row=store.create_record('practice',payload['owner_id'],{
-  'student_id':payload['student_id'],
-  'progress_revision':str(payload['revision']),
-  'status':'completed','snapshot':{'is_synthetic':True},'files':[],
-  'warnings':[],'feedback':None,'preview':{'items':[]},
- },parent_id=payload['student_id'])
- print(json.dumps({'id':row['id']}))
-finally:
- store.close()
-"""
-    result = _at_stage(
-        "synthetic practice seed", _run,
-        compose
-        + [
-            "exec",
-            "-T",
-            "api",
-            "/app/.venv/bin/python",
-            "-c",
-            code,
-        ],
-        timeout=30,
-        input_text=json.dumps(
-            {"owner_id": owner_id, "student_id": student_id, "revision": revision}
-        ),
+def _seed_completed_synthetic_practice(owner_id: str, student_id: str, revision: int) -> str:
+    from app.web_settings import WebSettings
+    from app.web_store import Store
+
+    settings = WebSettings.from_env()
+    store = Store(settings.database_url)
+    try:
+        row = store.create_record(
+            "practice",
+            owner_id,
+            {
+                "student_id": student_id,
+                "progress_revision": str(revision),
+                "status": "completed",
+                "snapshot": {"is_synthetic": True},
+                "files": [],
+                "warnings": [],
+                "feedback": None,
+                "preview": {"items": []},
+            },
+            parent_id=student_id,
+        )
+        return row["id"]
+    finally:
+        store.close()
+
+
+def _api_smoke_client(timeout_seconds: int, username: str, password: str) -> dict[str, Any]:
+    """Run the synthetic HTTP workflow from inside the API container."""
+    base_url = "http://127.0.0.1:8000"
+    cookies = http.cookiejar.CookieJar()
+    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cookies))
+    _wait_api(opener, base_url, timeout_seconds)
+
+    status, login = _json_request(
+        opener,
+        base_url + "/api/auth/login",
+        "POST",
+        {"username": username, "password": password},
     )
-    return json.loads(result.strip().splitlines()[-1])["id"]
+    if status != 200 or not isinstance(login, dict) or not isinstance(login.get("csrf_token"), str):
+        raise RuntimeError("synthetic admin login failed")
+    owner_id = login["user"]["id"]
+    csrf = login["csrf_token"]
+
+    status, student = _json_request(
+        opener,
+        base_url + "/api/students",
+        "POST",
+        {"name": "合成冒烟学生", "school": "", "grade": 8, "learned_point_ids": []},
+        csrf=csrf,
+    )
+    if status != 201 or not isinstance(student, dict):
+        raise RuntimeError("synthetic student creation failed")
+
+    status, exam = _json_request(
+        opener,
+        base_url + "/api/exams",
+        "POST",
+        {"student_id": student["id"], "title": "合成容器队列冒烟", "question_count": 1},
+        csrf=csrf,
+    )
+    if status != 201 or not isinstance(exam, dict):
+        raise RuntimeError("synthetic exam creation failed")
+    png = _png_1x1()
+    for role in ("paper", "response"):
+        uploaded = _multipart_upload(
+            opener, f"{base_url}/api/exams/{exam['id']}/assets", role, png, csrf
+        )
+        if uploaded != 201:
+            raise RuntimeError("synthetic exam asset upload failed")
+
+    status, job = _json_request(
+        opener,
+        f"{base_url}/api/exams/{exam['id']}/analyze",
+        "POST",
+        {"provider": "deepseek"},
+        csrf=csrf,
+    )
+    if status != 202 or not isinstance(job, dict):
+        raise RuntimeError("synthetic analysis did not enter the persistent queue")
+    job_status = job["status"]
+    deadline = time.monotonic() + timeout_seconds
+    while job_status in {"queued", "running"} and time.monotonic() < deadline:
+        time.sleep(1)
+        status, job = _json_request(opener, f"{base_url}/api/jobs/{job['id']}", "GET", timeout=8)
+        if status != 200 or not isinstance(job, dict):
+            raise RuntimeError("queued job could not be read")
+        job_status = job["status"]
+    if job_status != "failed":
+        # With no model key and an internal-only network, a failed configured
+        # analysis is expected; a synthetic success would be misleading.
+        raise RuntimeError("no-credential analysis job did not fail closed")
+
+    practice_id = _seed_completed_synthetic_practice(
+        owner_id, student["id"], student["progress_revision"]
+    )
+    status, feedback = _json_request(
+        opener,
+        f"{base_url}/api/practices/{practice_id}/feedback",
+        "POST",
+        {
+            "expectation": "partial",
+            "quality": 3,
+            "saved_minutes": 0,
+            "reasons": ["container-smoke"],
+            "comment": "纯合成容器反馈冒烟",
+        },
+        csrf=csrf,
+    )
+    if status != 200 or not isinstance(feedback, dict):
+        raise RuntimeError("synthetic feedback persistence failed")
+    status, practice = _json_request(opener, f"{base_url}/api/practices/{practice_id}", "GET")
+    if status != 200 or not practice.get("feedback"):
+        raise RuntimeError("synthetic feedback was not read back")
+
+    return {
+        "login": "passed",
+        "student_create": "passed",
+        "uploaded_synthetic_assets": 2,
+        "queued_job_worker_terminal_status": job_status,
+        "feedback_write_read": "passed",
+        "model_call": "not attempted; no credential and internal-only network",
+    }
+
+
+_API_SMOKE_CLIENT_SCRIPT = """import json,sys
+sys.path.insert(0, "/app/scripts")
+import container_smoke
+payload=json.load(sys.stdin)
+try:
+ result=container_smoke._api_smoke_client(
+  payload["timeout_seconds"],payload["username"],payload["password"])
+ response={"ok":True,"result":result}
+except Exception as exc:
+ error_type=type(exc).__name__
+ if error_type not in container_smoke._CLIENT_ERROR_TYPES:
+  error_type="OtherError"
+ hint=str(exc) if type(exc) is RuntimeError and str(exc) in container_smoke._SAFE_FAILURE_HINTS else None
+ response={"ok":False,"error_type":error_type,"hint":hint}
+print(json.dumps(response,ensure_ascii=False,separators=(",",":")))
+"""
 
 
 def _api_smoke(compose: list[str], timeout: int) -> dict[str, Any]:
-    port_text = _at_stage("API port discovery", _run,
-                          compose + ["port", "api", "8000"], timeout=15).strip().splitlines()[-1]
-    host, port = port_text.rsplit(":", 1)
-    if host in {"0.0.0.0", "::"}:
-        raise RuntimeError("smoke API port is not loopback-bound")
-    base_url = f"http://{host}:{port}"
-    cookies = http.cookiejar.CookieJar()
-    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cookies))
-    _wait_api(opener, base_url, timeout)
-
     _at_stage(
         "private image content check", _run,
         compose
@@ -384,99 +495,83 @@ def _api_smoke(compose: list[str], timeout: int) -> dict[str, Any]:
         timeout=30,
         input_text=password + "\n" + password + "\n",
     )
-    status, login = _json_request(
-        opener,
-        base_url + "/api/auth/login",
-        "POST",
-        {"username": username, "password": password},
-    )
-    if status != 200 or not isinstance(login, dict) or not isinstance(login.get("csrf_token"), str):
-        raise RuntimeError("synthetic admin login failed")
-    owner_id = login["user"]["id"]
-    csrf = login["csrf_token"]
 
-    status, student = _json_request(
-        opener,
-        base_url + "/api/students",
-        "POST",
-        {"name": "合成冒烟学生", "school": "", "grade": 8, "learned_point_ids": []},
-        csrf=csrf,
+    output = _at_stage(
+        "in-container HTTP workflow", _run,
+        compose
+        + [
+            "exec",
+            "-T",
+            "api",
+            "/app/.venv/bin/python",
+            "-c",
+            _API_SMOKE_CLIENT_SCRIPT,
+        ],
+        timeout=timeout + 30,
+        input_text=json.dumps(
+            {"timeout_seconds": timeout, "username": username, "password": password}
+        ),
     )
-    if status != 201 or not isinstance(student, dict):
-        raise RuntimeError("synthetic student creation failed")
-
-    status, exam = _json_request(
-        opener,
-        base_url + "/api/exams",
-        "POST",
-        {"student_id": student["id"], "title": "合成容器队列冒烟", "question_count": 1},
-        csrf=csrf,
-    )
-    if status != 201 or not isinstance(exam, dict):
-        raise RuntimeError("synthetic exam creation failed")
-    png = _png_1x1()
-    for role in ("paper", "response"):
-        uploaded = _multipart_upload(
-            opener, f"{base_url}/api/exams/{exam['id']}/assets", role, png, csrf
+    try:
+        response = json.loads(output)
+    except (TypeError, json.JSONDecodeError):
+        raise SmokeStageError(
+            "in-container HTTP workflow", SmokeClientError("ProtocolError")
+        ) from None
+    if not isinstance(response, dict) or type(response.get("ok")) is not bool:
+        raise SmokeStageError(
+            "in-container HTTP workflow", SmokeClientError("ProtocolError")
         )
-        if uploaded != 201:
-            raise RuntimeError("synthetic exam asset upload failed")
+    if response["ok"] is False:
+        if set(response) != {"ok", "error_type", "hint"}:
+            raise SmokeStageError(
+                "in-container HTTP workflow", SmokeClientError("ProtocolError")
+            )
+        error_type = response["error_type"]
+        hint = response["hint"]
+        if (
+            not isinstance(error_type, str)
+            or error_type not in _CLIENT_ERROR_TYPES
+            or (hint is not None and (not isinstance(hint, str) or hint not in _SAFE_FAILURE_HINTS))
+        ):
+            raise SmokeStageError(
+                "in-container HTTP workflow", SmokeClientError("ProtocolError")
+            )
+        raise SmokeStageError(
+            "in-container HTTP workflow", SmokeClientError(error_type, hint)
+        )
 
-    status, job = _json_request(
-        opener,
-        f"{base_url}/api/exams/{exam['id']}/analyze",
-        "POST",
-        {"provider": "deepseek"},
-        csrf=csrf,
-    )
-    if status != 202 or not isinstance(job, dict):
-        raise RuntimeError("synthetic analysis did not enter the persistent queue")
-    job_status = job["status"]
-    deadline = time.monotonic() + timeout
-    while job_status in {"queued", "running"} and time.monotonic() < deadline:
-        time.sleep(1)
-        status, job = _json_request(opener, f"{base_url}/api/jobs/{job['id']}", "GET", timeout=8)
-        if status != 200 or not isinstance(job, dict):
-            raise RuntimeError("queued job could not be read")
-        job_status = job["status"]
-    if job_status != "failed":
-        # With no model key and an internal-only network, a failed configured
-        # analysis is expected; a synthetic success would be misleading.
-        raise RuntimeError("no-credential analysis job did not fail closed")
-
-    practice_id = _seed_completed_synthetic_practice(
-        compose, owner_id, student["id"], student["progress_revision"]
-    )
-    status, feedback = _json_request(
-        opener,
-        f"{base_url}/api/practices/{practice_id}/feedback",
-        "POST",
-        {
-            "expectation": "partial",
-            "quality": 3,
-            "saved_minutes": 0,
-            "reasons": ["container-smoke"],
-            "comment": "纯合成容器反馈冒烟",
-        },
-        csrf=csrf,
-    )
-    if status != 200 or not isinstance(feedback, dict):
-        raise RuntimeError("synthetic feedback persistence failed")
-    status, practice = _json_request(opener, f"{base_url}/api/practices/{practice_id}", "GET")
-    if status != 200 or not practice.get("feedback"):
-        raise RuntimeError("synthetic feedback was not read back")
-
+    expected_fields = {
+        "login",
+        "student_create",
+        "uploaded_synthetic_assets",
+        "queued_job_worker_terminal_status",
+        "feedback_write_read",
+        "model_call",
+    }
+    result = response.get("result")
+    if set(response) != {"ok", "result"} or not isinstance(result, dict) or set(result) != expected_fields:
+        raise SmokeStageError(
+            "in-container HTTP workflow", SmokeClientError("ProtocolError")
+        )
+    if (
+        result["login"] != "passed"
+        or result["student_create"] != "passed"
+        or type(result["uploaded_synthetic_assets"]) is not int
+        or result["uploaded_synthetic_assets"] != 2
+        or result["queued_job_worker_terminal_status"] != "failed"
+        or result["feedback_write_read"] != "passed"
+        or result["model_call"] != "not attempted; no credential and internal-only network"
+    ):
+        raise SmokeStageError(
+            "in-container HTTP workflow", SmokeClientError("ProtocolError")
+        )
     return {
         "api_ready": True,
         "private_build_paths_absent": True,
         "api_healthcheck": "passed",
         "worker_healthcheck": "passed",
-        "login": "passed",
-        "student_create": "passed",
-        "uploaded_synthetic_assets": 2,
-        "queued_job_worker_terminal_status": job_status,
-        "feedback_write_read": "passed",
-        "model_call": "not attempted; no credential and internal-only network",
+        **result,
     }
 
 

@@ -21,9 +21,6 @@ RUN GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.version GIT_CONFIG_VALUE_0=HTTP/1.1
     uv sync --locked --no-dev --group export --no-install-project
 
 FROM python:3.13-slim-bookworm AS runtime
-ARG VCS_REF=unknown
-LABEL org.opencontainers.image.source="https://github.com/contr4l/Teassistant" \
-    org.opencontainers.image.revision="${VCS_REF}"
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
@@ -75,3 +72,7 @@ ENTRYPOINT ["/app/.venv/bin/python", "/app/scripts/container_entrypoint.py"]
 CMD ["/app/.venv/bin/uvicorn", "app.web_api:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000"]
 HEALTHCHECK --interval=30s --timeout=5s --start-period=90s --retries=3 \
     CMD ["/app/.venv/bin/python", "/app/scripts/container_healthcheck.py", "--role", "api"]
+
+ARG VCS_REF=unknown
+LABEL org.opencontainers.image.source="https://github.com/contr4l/Teassistant" \
+    org.opencontainers.image.revision="${VCS_REF}"
