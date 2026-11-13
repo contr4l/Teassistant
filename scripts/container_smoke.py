@@ -463,6 +463,14 @@ def run_smoke(
             _run(compose + ["run", "--rm", "-T", "init"], timeout=60)
             _run(compose + ["up", "--detach", "--wait", "postgres", "api", "worker"], timeout=120)
             result["web_workflow"] = _api_smoke(compose, timeout_seconds)
+            chromium = _run(
+                compose + [
+                    "run", "--rm", "-T", "--no-deps", "api", "/app/.venv/bin/python",
+                    "/app/scripts/container_smoke_fixture.py", "chromium",
+                    "--output", "/smoke/chromium-render",
+                ],
+                timeout=90,
+            )
             word = _run(
                 compose
                 + [
@@ -496,6 +504,7 @@ def run_smoke(
                 timeout=240,
             )
             result["synthetic_word_export"] = json.loads(word.strip().splitlines()[-1])
+            result["synthetic_chromium_render"] = json.loads(chromium.strip().splitlines()[-1])
             result["synthetic_latex_export"] = json.loads(latex.strip().splitlines()[-1])
         finally:
             _run(compose + ["down", "--volumes", "--remove-orphans"], timeout=45)

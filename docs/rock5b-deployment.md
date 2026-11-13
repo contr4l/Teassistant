@@ -6,7 +6,9 @@
 
 当前版本包含网页、Docker部署和账号初始化入口。克隆仓库最新`main`，准备好Docker和私有配置后，可以用`deploy.py bootstrap`完成配置初始化、构建、启动、等待健康及预设账号导入。已有克隆应先同步最新`main`；私有账号文件、API key和题库仍需单独准备，不随Git分发。
 
-本地完整镜像构建此前因Docker Hub/GHCR下载超时未完成，ROCK 5B尚未实机部署。这份文档是可执行的准备与操作流程，不是板上通过报告。当前GitHub Actions镜像验证/发布目标为linux/amd64，不能直接把该镜像当作ROCK 5B镜像；本流程在板子上原生构建linux/arm64。
+用户于2026-11-14确认板上服务已运行；当前工作区的Actions流程新增原生linux/amd64与linux/arm64构建、冒烟及多架构GHCR发布配置。是否已有可拉取版本，以实际成功的Actions发布结果为准；本地配置和测试不能代替远端构建或板上升级验证。
+
+日常升级优先使用[GitHub预构建镜像](deployment.md#使用-github-actions-镜像)：把成功发布摘要中的`TEASSISTANT_IMAGE`写入原`.env.deploy`，然后执行`python3 scripts/deploy.py pull`和`python3 scripts/deploy.py up`。板子自动选取ARM64，不重新编译Node/Python或安装TeX/Chromium。下面的`--build`流程保留给首次本地构建和显式排障。
 
 ## 1 环境确认
 

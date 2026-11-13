@@ -50,6 +50,42 @@ def test_generated_upload_is_valid_synthetic_png():
     image.verify()
 
 
+def test_chromium_failure_blocks_smoke_report_and_cleans_disposable_stack(tmp_path, monkeypatch):
+    commands = []
+
+    def execute(command, **_kwargs):
+        commands.append(command)
+        if command[1:3] == ["image", "inspect"]:
+            return "linux/arm64\n"
+        if "chromium" in command:
+            raise RuntimeError("synthetic Chromium launch failure")
+        return ""
+
+    monkeypatch.setattr(smoke.shutil, "which", lambda _name: "/synthetic/docker")
+    monkeypatch.setattr(smoke, "_run", execute)
+    monkeypatch.setattr(smoke, "_api_smoke", lambda *_a, **_k: {"synthetic": True})
+    report = tmp_path / "report.json"
+    with pytest.raises(RuntimeError, match="Chromium"):
+        smoke.run_smoke("synthetic-arm64:local", report_path=report)
+    assert not report.exists()
+    assert any("down" in c and "--volumes" in c for c in commands)
+    assert not any("word" in c or "latex" in c for c in commands)
+
+
+def test_chromium_fixture_refuses_missing_executable(tmp_path, monkeypatch):
+    fixture_spec = importlib.util.spec_from_file_location(
+        "browser_fixture", ROOT / "scripts/container_smoke_fixture.py"
+    )
+    fixture = importlib.util.module_from_spec(fixture_spec)
+    fixture_spec.loader.exec_module(fixture)
+    monkeypatch.delenv("TEASSISTANT_CHROMIUM", raising=False)
+    monkeypatch.setattr(fixture.shutil, "which", lambda _name: None)
+    output = tmp_path / "browser-output"
+    with pytest.raises(RuntimeError, match="Chromium executable"):
+        fixture.render_chromium(output)
+    assert not output.exists()
+
+
 def test_command_runner_uses_argv_without_shell(monkeypatch):
     captured = {}
 

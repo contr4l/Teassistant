@@ -31,7 +31,7 @@
 
 ## Docker 单机部署
 
-ROCK 5B（ARM64）环境确认、板上原生构建和预设管理员/教师账号见 [ROCK 5B 部署指南](docs/rock5b-deployment.md)。准备私有配置与账号文件后可运行 `python3 scripts/deploy.py bootstrap --build --accounts-file .accounts.deploy.json`；不将当前amd64流水线或未推送工作区称为板上已验证版本。
+ROCK 5B（ARM64）环境确认与预设账号见[板上部署指南](docs/rock5b-deployment.md)。日常升级优先从成功的GitHub Actions运行取得GHCR多架构镜像，在原`.env.deploy`设置镜像引用后运行`python3 scripts/deploy.py pull`及`python3 scripts/deploy.py up`，板子只下载并运行ARM64镜像。首次也可显式执行`python3 scripts/deploy.py bootstrap --build --accounts-file .accounts.deploy.json`本地构建。流水线配置完成、云端构建成功与板上健康分别验证，不互相替代。
 
 服务器准备 Docker Engine、Compose v2 和 Python 3（仅标准库），不需要在宿主机安装 Node、uv、中文字体或 LaTeX。部署配置与开发配置分开：
 

@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Build and verify synthetic document/PDF exports inside the production image."""
+"""Verify synthetic browser rendering and document/PDF exports in the image."""
 
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
 import re
@@ -184,12 +185,53 @@ def export_latex(output: Path) -> dict[str, object]:
     }
 
 
+def render_chromium(output: Path) -> dict[str, object]:
+    from PIL import Image
+    from playwright.sync_api import sync_playwright
+
+    executable = os.getenv("TEASSISTANT_CHROMIUM") or shutil.which("chromium")
+    if not executable:
+        raise RuntimeError("Chromium executable is unavailable")
+    output.mkdir(parents=True, exist_ok=False)
+    geometry = output / "synthetic-geometry.png"
+    _make_geometry_png(geometry)
+    embedded = base64.b64encode(geometry.read_bytes()).decode("ascii")
+    markup = (
+        '<!doctype html><meta charset="utf-8"><style>body {font-family: sans-serif;}</style>'
+        '<main><h1>合成题库渲染检查</h1><p>计算：</p>'
+        '<math xmlns="http://www.w3.org/1998/Math/MathML"><mfrac><mn>1</mn><mn>2</mn>'
+        '</mfrac></math><table><tr><td>合成数据</td><td>2</td></tr></table>'
+        f'<img src="data:image/png;base64,{embedded}" alt="合成几何图"></main>'
+    )
+    screenshot = output / "synthetic-page.png"
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True, executable_path=executable)
+        try:
+            page = browser.new_page(viewport={"width": 1100, "height": 800})
+            page.route("**/*", lambda route: route.abort())
+            page.set_content(markup, wait_until="load", timeout=30000)
+            page.evaluate("() => document.fonts.ready.then(() => true)")
+            if page.locator("math").count() != 1 or not page.locator("img").evaluate(
+                "img => img.complete && img.naturalWidth > 0"
+            ):
+                raise RuntimeError("Chromium synthetic mathematics or image failed to render")
+            page.screenshot(path=str(screenshot), full_page=True, timeout=30000)
+        finally:
+            browser.close()
+    with Image.open(screenshot) as image:
+        image.verify()
+    return {"synthetic": True, "screenshot_bytes": screenshot.stat().st_size,
+            "math_elements": 1, "external_network": False}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("kind", choices=("word", "latex"))
+    parser.add_argument("kind", choices=("word", "latex", "chromium"))
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
-    result = export_word(args.output) if args.kind == "word" else export_latex(args.output)
+    result = {"word": export_word, "latex": export_latex, "chromium": render_chromium}[
+        args.kind
+    ](args.output)
     print(json.dumps({"status": "passed", "kind": args.kind, "checks": result}, ensure_ascii=False))
     return 0
 

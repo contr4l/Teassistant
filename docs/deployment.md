@@ -88,11 +88,13 @@ check 验证配置、必需文件和 Compose 语法，不代替题库全部内�
 
 ## 使用 GitHub Actions 镜像
 
-工作流在 PR 运行测试、前端检查、镜像构建和容器合成冒烟。受信默认分支 push、版本标签以及受约束的手动发布通过全部门禁后，才发布到 `ghcr.io/contr4l/teassistant`。本次只是建立流水线，未代替你提交/推送代码或实际发布镜像。
+工作流在PR运行测试、前端检查，以及原生AMD64和ARM64镜像构建及容器合成冒烟。受信默认分支push、受保护版本标签及默认分支手动发布通过全部门禁后，才发布到`ghcr.io/contr4l/teassistant`。只有实际成功的Actions发布运行才证明镜像可拉取；本地配置与离线检查不作此声明。
+
+`ubuntu-24.04`与`ubuntu-24.04-arm`分别构建各自架构，按架构复用BuildKit GHA缓存。API/Worker、数据库持久队列、无密钥失败、Word/LaTeX及Chromium合成页面渲染均在对应架构容器内检查；不靠x86构建成功推导ARM可用。发布任务再次验证实际镜像，临时标签含run_id/run_attempt/arch，正式SHA和latest/semver索引都在推送前校验两个Linux平台及完全相同的描述符digest映射，并在推送后复验。索引不包含额外attestation附件，减少旧Docker客户端的兼容障碍。
 
 推送代码后先在仓库 Actions 查看结果，再从该次发布记录选择镜像标签或 digest。私有 GHCR 包需要服务器以具有 `read:packages` 的账户凭据登录；使用交互 `docker login ghcr.io`，不要把令牌写进本项目配置、shell 命令参数或仓库。
 
-仓库需允许工作流请求 `packages: write`，组织策略可能另外限制发布。版本发布标签须为 `v主版本.次版本.修订版本`，并在仓库 Rulesets 中保护 `v*` 标签；未保护标签只执行检查，不发布。默认分支推送和在默认分支手动运行使用 `latest` 及完整提交 SHA 标签。每次成功发布的 Actions 摘要会给出可复制的 `TEASSISTANT_IMAGE=...:提交SHA`。PR 和非默认分支手动运行不会发布。
+仓库需允许工作流请求`packages: write`，组织策略可能另外限制发布。版本标签须为`v主版本.次版本.修订版本`，并在Rulesets保护`v*`；未保护标签只检查，不发布。默认分支push/手动运行生成latest与完整提交SHA标签，每次成功发布摘要给出可复制的`TEASSISTANT_IMAGE=...:提交SHA`。PR及非默认分支手动运行不发布，PR构建任务无包写权限。镜像默认可见性不由本流程更改，首次GHCR包通常为private；公开包可匿名拉取，私有包由用户使用具有read:packages权限的PAT登录，不能用GitHub账户密码代替令牌。
 
 已发布镜像的部署：
 
@@ -102,7 +104,13 @@ python3 scripts/deploy.py pull
 python3 scripts/deploy.py up
 ```
 
-更新采用同样两条命令；up 不自动构建。建议固定版本标签/digest，使用浮动分支标签会降低回退可复现性。镜像架构必须与服务器相符；已验证和未验证的架构以本批验收记录及发布说明为准，不因 Dockerfile 可构建就宣称全部平台已验证。
+更新采用同样两条命令，`up`明确带`--no-build`，镜像拉取失败不会悄悄在板上重新编译。保留原Compose项目名、端口、数据库密码、种子挂载及两个数据卷；API和Worker一起使用同一镜像。首次下载包含TeX/字体/Chromium的大镜像层，后续复用已有层，只拉取变化内容，耗时仍取决于网络和缓存。
+
+ROCK 5B无需重新上传整套源码或重新初始化账号；原压缩包部署目录可以继续使用。当前Compose和deploy.py已支持此方式；未来若部署协议/Compose有变化，仍需同步小体积部署文件。升级前按下节备份，成功后刷新网页确认版本和业务。
+
+建议固定不可变digest；完整提交SHA标签比latest易追踪，但同一提交重新构建仍可能覆盖其SHA标签（上游基础镜像可更新）。可在板子执行`docker image inspect 镜像引用 --format '{{json .RepoDigests}}'`取得digest，再把准确引用写入`.env.deploy`。GHCR不提供多个标签的跨标签事务，网络中断可能留下SHA已发布但latest未更新；只按最终成功运行的摘要部署，不把失败运行的中间推送当完整发布。
+
+GitHub原生ARM64 runner是否可用、组织权限及私有仓库计算分钟以实际账户策略为准。ARM64容器冒烟成功也不代表具体ROCK内核/Docker版本、真实DeepSeek质量、手机访问或备份恢复已经验收。
 
 ## 构建期间的代理与 GitHub 下载
 
