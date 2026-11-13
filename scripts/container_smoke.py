@@ -170,6 +170,33 @@ networks:
 """
 
 
+def _emit_chromium_fixture_diagnostic(output: str) -> None:
+    """Bounded diagnostics only for the trusted, synthetic Chromium fixture."""
+    if os.environ.get("GITHUB_ACTIONS") != "true":
+        return
+    safe = output or ""
+    for name, value in os.environ.items():
+        if len(value) >= 4 and re.search(
+            r"KEY|TOKEN|PASSWORD|SECRET|DATABASE_URL|DSN|AUTH|CREDENTIAL", name, re.I
+        ):
+            safe = safe.replace(value, "<redacted>")
+    safe = re.sub(r"[a-zA-Z][a-zA-Z0-9+.-]*://[^\s\"'<>]+", "<url>", safe)
+    safe = re.sub(r"(?i)\bauthorization[\"']?\s*:\s*(?:Bearer|Basic)\s+[^\s\"']+",
+                  "<redacted-authorization>", safe)
+    safe = re.sub(
+        r"(?i)\b(?:password|api[_-]?key|(?:access[_-]?)?token|secret|dsn|database[_-]?url)"
+        r"[\"']?\s*[=:]\s*"
+        r"(?:'[^']*'|\"[^\"]*\"|[^\s,;]+)",
+        "<redacted-field>", safe,
+    )
+    safe = re.sub(r"(?<![\w])/(?:[^\s<>\"':,]+)", "<path>", safe)
+    safe = re.sub(r"[A-Za-z]:[\\/][^\s<>\"']+", "<path>", safe)
+    safe = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", safe)[-65536:]
+    safe = safe.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+    prefix = "::error title=Chromium synthetic diagnostic::"
+    print(prefix + safe[-(5000 - len(prefix)):], file=sys.stderr)
+
+
 def _run(command: list[str], *, timeout: int, input_text: str | None = None) -> str:
     result = subprocess.run(
         command,
@@ -181,6 +208,11 @@ def _run(command: list[str], *, timeout: int, input_text: str | None = None) -> 
         check=False,
     )
     if result.returncode:
+        fixture = "/app/scripts/container_smoke_fixture.py"
+        if fixture in command:
+            position = command.index(fixture)
+            if command[position + 1:position + 2] == ["chromium"]:
+                _emit_chromium_fixture_diagnostic(result.stdout)
         tail = (result.stdout or "")[-65536:]
         markers = tuple(marker for marker in _COMMAND_ERROR_MARKERS
                         if re.search(r"(?:^|[\s.])" + marker + r"(?=:|\s*$)", tail, re.MULTILINE))
