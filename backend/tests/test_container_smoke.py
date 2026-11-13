@@ -36,7 +36,8 @@ def test_temporary_compose_is_isolated_and_has_no_model_or_host_data_mounts(tmp_
     assert 'TEASSISTANT_ALLOW_CODEX: "0"' in config
     assert "evals/private" not in config
     assert "${HOME}" not in config
-    assert '"' + str(tmp_path / "share with space") + ':/smoke:rw"' in config
+    assert str(tmp_path / "share with space") not in config
+    assert ":/smoke" not in config
     assert "run_web_worker.py" in config
     worker = config.split("  worker:\n", 1)[1]
     assert "container_healthcheck.py, --role, worker" in worker

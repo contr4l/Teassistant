@@ -98,7 +98,7 @@ def _validate_image(image: str) -> str:
 
 def _compose_text(image: str, share: Path, db_password: str) -> str:
     image_yaml = json.dumps(image)
-    share_yaml = json.dumps(f"{share}:/smoke:rw")
+    # Keep the argument for callers; container-owned outputs stay in named volumes.
     password_yaml = json.dumps(db_password)
     app_env = """      TEASSISTANT_DATABASE_URL: postgresql+psycopg://smoke:{db}@postgres:5432/smoke
       TEASSISTANT_DATA_DIR: /app/work/private
@@ -131,7 +131,6 @@ def _compose_text(image: str, share: Path, db_password: str) -> str:
 {app_env}
     volumes:
       - smoke_data:/app/work
-      - {share_yaml}
     depends_on:
       postgres:
         condition: service_healthy
@@ -142,7 +141,6 @@ def _compose_text(image: str, share: Path, db_password: str) -> str:
 {app_env}
     volumes:
       - smoke_data:/app/work
-      - {share_yaml}
     depends_on:
       init:
         condition: service_completed_successfully
@@ -159,7 +157,6 @@ def _compose_text(image: str, share: Path, db_password: str) -> str:
 {app_env}
     volumes:
       - smoke_data:/app/work
-      - {share_yaml}
     depends_on:
       init:
         condition: service_completed_successfully
@@ -599,8 +596,6 @@ def run_smoke(
     with tempfile.TemporaryDirectory(prefix="teassistant-container-smoke-") as temp_text:
         temp = Path(temp_text)
         share = temp / "share"
-        share.mkdir(mode=0o777)
-        share.chmod(0o777)
         db_password = secrets.token_urlsafe(24)
         compose_file = temp / "compose.yaml"
         compose_file.write_text(_compose_text(image, share, db_password), encoding="utf-8")
@@ -624,7 +619,7 @@ def run_smoke(
                 compose + [
                     "run", "--rm", "-T", "--no-deps", "api", "/app/.venv/bin/python",
                     "/app/scripts/container_smoke_fixture.py", "chromium",
-                    "--output", "/smoke/chromium-render",
+                    "--output", "/app/work/container-smoke/chromium-render",
                 ],
                 timeout=90,
             )
@@ -641,7 +636,7 @@ def run_smoke(
                     "/app/scripts/container_smoke_fixture.py",
                     "word",
                     "--output",
-                    "/smoke/word-export",
+                    "/app/work/container-smoke/word-export",
                 ],
                 timeout=240,
             )
@@ -658,7 +653,7 @@ def run_smoke(
                     "/app/scripts/container_smoke_fixture.py",
                     "latex",
                     "--output",
-                    "/smoke/latex-export",
+                    "/app/work/container-smoke/latex-export",
                 ],
                 timeout=240,
             )
@@ -674,11 +669,11 @@ def run_smoke(
                 if not already_failing:
                     raise
                 print(f"container smoke cleanup failed: {cleanup_error.summary}", file=sys.stderr)
-        if report_path is not None:
-            report_path.parent.mkdir(parents=True, exist_ok=True)
-            temporary = report_path.with_name(f".{report_path.name}.{secrets.token_hex(4)}.tmp")
-            temporary.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n")
-            os.replace(temporary, report_path)
+    if report_path is not None:
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = report_path.with_name(f".{report_path.name}.{secrets.token_hex(4)}.tmp")
+        temporary.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n")
+        os.replace(temporary, report_path)
     return result
 
 
@@ -705,6 +700,9 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as exc:
         print(f"container smoke failed: {type(exc).__name__}", file=sys.stderr)
+        if os.environ.get("GITHUB_ACTIONS") == "true":
+            print(f"::error title=Container smoke failure::stage=host lifecycle; "
+                  f"error={type(exc).__name__}", file=sys.stderr)
         return 2
     print(json.dumps(report, ensure_ascii=False))
     return 0
