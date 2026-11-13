@@ -35,11 +35,17 @@ _SAFE_FAILURE_HINTS = frozenset({
     "synthetic feedback persistence failed",
     "synthetic feedback was not read back",
 })
+_COMMAND_ERROR_MARKERS = (
+    "EOFError", "ModuleNotFoundError", "ImportError", "PermissionError",
+    "FileNotFoundError", "AssertionError", "ValueError", "KeyError",
+    "OperationalError", "IntegrityError", "ProgrammingError",
+)
 
 
 class SmokeCommandError(RuntimeError):
-    def __init__(self, exit_code: int):
+    def __init__(self, exit_code: int, markers: tuple[str, ...] = ()):
         self.exit_code = exit_code
+        self.markers = tuple(marker for marker in _COMMAND_ERROR_MARKERS if marker in markers)
         super().__init__(f"container smoke command failed (exit {exit_code})")
 
 
@@ -50,6 +56,8 @@ class SmokeStageError(RuntimeError):
         self.summary = f"stage={stage}; error={type(error).__name__}"
         if isinstance(error, SmokeCommandError):
             self.summary += f"; exit={error.exit_code}"
+            if error.markers:
+                self.summary += f"; markers={','.join(error.markers)}"
         elif type(error) is RuntimeError and str(error) in _SAFE_FAILURE_HINTS:
             self.summary += f"; hint={error}"
         super().__init__(self.summary)
@@ -58,7 +66,9 @@ class SmokeStageError(RuntimeError):
 def _at_stage(stage, operation, *args, **kwargs):
     try:
         return operation(*args, **kwargs)
-    except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as exc:
+    except SmokeStageError:
+        raise
+    except Exception as exc:
         raise SmokeStageError(stage, exc) from exc
 
 
@@ -158,7 +168,10 @@ def _run(command: list[str], *, timeout: int, input_text: str | None = None) -> 
         check=False,
     )
     if result.returncode:
-        raise SmokeCommandError(result.returncode)
+        tail = (result.stdout or "")[-65536:]
+        markers = tuple(marker for marker in _COMMAND_ERROR_MARKERS
+                        if re.search(r"(?:^|[\s.])" + marker + r"(?=:|\s*$)", tail, re.MULTILINE))
+        raise SmokeCommandError(result.returncode, markers)
     return result.stdout
 
 
@@ -273,7 +286,8 @@ try:
 finally:
  store.close()
 """
-    result = _run(
+    result = _at_stage(
+        "synthetic practice seed", _run,
         compose
         + [
             "exec",
@@ -292,7 +306,8 @@ finally:
 
 
 def _api_smoke(compose: list[str], timeout: int) -> dict[str, Any]:
-    port_text = _run(compose + ["port", "api", "8000"], timeout=15).strip().splitlines()[-1]
+    port_text = _at_stage("API port discovery", _run,
+                          compose + ["port", "api", "8000"], timeout=15).strip().splitlines()[-1]
     host, port = port_text.rsplit(":", 1)
     if host in {"0.0.0.0", "::"}:
         raise RuntimeError("smoke API port is not loopback-bound")
@@ -301,7 +316,8 @@ def _api_smoke(compose: list[str], timeout: int) -> dict[str, Any]:
     opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cookies))
     _wait_api(opener, base_url, timeout)
 
-    _run(
+    _at_stage(
+        "private image content check", _run,
         compose
         + [
             "exec",
@@ -317,7 +333,8 @@ def _api_smoke(compose: list[str], timeout: int) -> dict[str, Any]:
         timeout=20,
     )
 
-    _run(
+    _at_stage(
+        "API healthcheck", _run,
         compose
         + [
             "exec",
@@ -330,7 +347,8 @@ def _api_smoke(compose: list[str], timeout: int) -> dict[str, Any]:
         ],
         timeout=20,
     )
-    _run(
+    _at_stage(
+        "worker healthcheck", _run,
         compose
         + [
             "exec",
@@ -346,7 +364,8 @@ def _api_smoke(compose: list[str], timeout: int) -> dict[str, Any]:
 
     username = "smoke-" + secrets.token_hex(6)
     password = secrets.token_urlsafe(24)
-    _run(
+    _at_stage(
+        "synthetic administrator creation", _run,
         compose
         + [
             "run",

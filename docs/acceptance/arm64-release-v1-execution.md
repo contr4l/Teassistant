@@ -41,3 +41,13 @@ manifest 反例包含缺 ARM、重复平台、额外 attestation、错误 OS、�
 GPT-6 Luna / high 独立只读复查并执行 `test_container_smoke.py`：10 passed，未发现异常 payload、凭据或命令日志泄露及绕过门禁。非阻塞限制：不符合预期的成功响应可能触发未包装的 KeyError / IndexError / AttributeError，此时仍失败关闭，但没有受控阶段 annotation。
 
 诊断改动全量 `make check` 再次通过（816 passed、1 条同源弃用 warning）；日志保存在被忽略的 `work/arm64-release-v1/diagnostic-make-check.log`。用户提供的原始失败步骤文本也只有 `container smoke failed: RuntimeError`，不能据此判断具体根因。
+
+## 命令级诊断
+
+`a764d311337a21d005dfdbafe7834b50f541fcd2` 已推送，[Actions 43489029154](https://github.com/contr4l/Teassistant/actions/runs/43489029154) 的前后端再次通过，两种原生镜像再次构建成功，但容器测试均返回公开 annotation：`stage=web workflow; error=SmokeCommandError; exit=1`。用户提供的截图与公共 API 一致。失败发生在 `_api_smoke` 内某条容器命令，尚未执行 Chromium/Word/LaTeX 渲染；不能从此推断具体子命令或 ARM 兼容性根因。GPT-6 Luna / high 只读核对接口、Docker 入口、健康检查与 Store 合同，没有证据足以静态确定具体根因。
+
+因此进一步拆分固定命令阶段：发现端口、镜像私有内容检查、API 健康检查、Worker 健康检查、创建合成管理员及写入合成练习。嵌套阶段保留最具体的错误；任意常规 Exception 也使用受控摘要，解决前述响应形状边角。命令输出尾部最多 64 KiB 仅用于识别固定异常名称白名单，公开摘要只包含这些预设类名，不含原始行、命令参数、路径或凭据。
+
+上述细分改动的 Ruff 及相关部署检查共 48 项通过，包含未知异常 payload 脱敏、嵌套阶段保留、固定错误名称提取及任意 marker 拒绝。不把诊断增强当作容器故障已经修复。
+
+GPT-6 Luna / high 独立执行容器冒烟测试：15 passed，复查 marker 白名单、嵌套阶段和清理门禁通过。全量 `make check` 为 821 passed（同源 warning 1 条），日志在被忽略的 `work/arm64-release-v1/command-diagnostic-make-check.log`。另用本机 SQLite 与合成账号实际执行管理员 CLI 的两行密码管道，退出 0；该验证不覆盖 Docker Compose 的 stdin 行为，也不能据此排除云端创建管理员命令。

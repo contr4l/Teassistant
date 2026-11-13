@@ -86,19 +86,20 @@ def test_chromium_fixture_refuses_missing_executable(tmp_path, monkeypatch):
     assert not output.exists()
 
 
-def test_failure_annotation_reports_stage_without_exception_payload(monkeypatch, capsys):
+@pytest.mark.parametrize("error_type", [RuntimeError, KeyError, IndexError, AttributeError])
+def test_failure_annotation_reports_stage_without_exception_payload(monkeypatch, capsys, error_type):
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
 
     def fail(*_args, **_kwargs):
         def operation():
-            raise RuntimeError("SYNTHETIC_SECRET\n::error::injected")
+            raise error_type("SYNTHETIC_SECRET\n::error::injected")
         smoke._at_stage("web workflow", operation)
 
     monkeypatch.setattr(smoke, "run_smoke", fail)
     assert smoke.main(["--image", "synthetic:local"]) == 2
     output = capsys.readouterr().err
     assert "::error title=Container smoke failure::stage=web workflow" in output
-    assert "RuntimeError" in output
+    assert error_type.__name__ in output
     assert "SYNTHETIC_SECRET" not in output and "injected" not in output
 
 
@@ -127,6 +128,32 @@ def test_known_static_failure_hint_is_reported_without_command_output():
     assert "hint=synthetic admin login failed" in error.summary
     error = smoke.SmokeStageError("service startup", smoke.SmokeCommandError(9))
     assert error.summary == "stage=service startup; error=SmokeCommandError; exit=9"
+
+
+def test_nested_stage_retains_specific_failure():
+    def inner():
+        smoke._at_stage("synthetic practice seed", lambda: (_ for _ in ()).throw(
+            smoke.SmokeCommandError(1)
+        ))
+
+    with pytest.raises(smoke.SmokeStageError, match="stage=synthetic practice seed") as error:
+        smoke._at_stage("web workflow", inner)
+    assert "stage=web workflow" not in error.value.summary
+
+
+def test_command_diagnostic_only_extracts_whitelisted_error_names(monkeypatch):
+    class Failed:
+        returncode = 1
+        stdout = "SYNTHETIC_PASSWORD\nTraceback:\nsqlalchemy.exc.OperationalError: PRIVATE_DSN\n"
+
+    monkeypatch.setattr(smoke.subprocess, "run", lambda *_args, **_kwargs: Failed())
+    with pytest.raises(smoke.SmokeCommandError) as error:
+        smoke._run(["synthetic-docker"], timeout=2)
+    diagnostic = smoke.SmokeStageError("synthetic practice seed", error.value).summary
+    assert "markers=OperationalError" in diagnostic
+    assert "SYNTHETIC_PASSWORD" not in diagnostic and "PRIVATE_DSN" not in diagnostic
+    arbitrary = smoke.SmokeCommandError(1, ("secret\n::error::injected",))
+    assert arbitrary.markers == ()
 
 
 def test_command_runner_uses_argv_without_shell(monkeypatch):
