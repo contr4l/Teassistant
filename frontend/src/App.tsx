@@ -1,5 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import AdminModelBilling from './AdminModelBilling'
+import AdminBank from './AdminBank'
+import { SanitizedPreview } from './SafePreview'
 import UsageGuide from './UsageGuide'
 import { MathBlock, MathText } from './MathText'
 import {
@@ -1285,96 +1287,8 @@ function QuestionContent({ item, index }: { item: Record<string, any>; index: nu
   return <div className="preview-item"><div className="preview-item-head"><span>{String(item.order ?? index + 1).padStart(2, '0')}</span><b>{String(item.target_point_name ?? item.target_point_id ?? '考点')}</b><small>{question.difficulty_score === undefined ? '难度未确认' : `难度 ${question.difficulty_score}`}</small></div><div className="plain-content">{renderNodes(question.stem)}</div><details><summary>答案与解析</summary><div className="plain-content">{renderNodes(question.answer)}{renderNodes(question.solution)}</div></details></div>
 }
 
-function sanitizeHtmlForPreview(markup: string) {
-  const parsed = new DOMParser().parseFromString(markup, 'text/html')
-  const htmlNamespace = 'http://www.w3.org/1999/xhtml'
-  const mathNamespace = 'http://www.w3.org/1998/Math/MathML'
-  const allowedHtml = new Set(['p', 'div', 'span', 'br', 'b', 'strong', 'i', 'em', 'ul', 'ol', 'li', 'table', 'thead', 'tbody', 'tr', 'td', 'th', 'sub', 'sup', 'img'])
-  const allowedMath = new Set(['math', 'mrow', 'mi', 'mn', 'mo', 'mtext', 'mfrac', 'msqrt', 'mroot', 'msup', 'msub', 'msubsup', 'munder', 'mover', 'munderover'])
-  const allowedMathAttributes: Record<string, Record<string, Set<string>>> = {
-    math: { xmlns: new Set([mathNamespace]) },
-    mi: { mathvariant: new Set(['normal']) },
-    mn: { mathvariant: new Set(['normal']) },
-    mo: { mathvariant: new Set(['normal']), fence: new Set(['true', 'false']), stretchy: new Set(['true', 'false']) },
-    mtext: { mathvariant: new Set(['normal']) },
-    mover: { accent: new Set(['true', 'false']) },
-    munder: { accentunder: new Set(['true', 'false']) },
-  }
-  const mathIsSupported = (element: Element): boolean => {
-    const tag = element.localName.toLowerCase()
-    if (element.namespaceURI !== mathNamespace || !allowedMath.has(tag)) return false
-    const tagAttrs = allowedMathAttributes[tag] ?? {}
-    if (Array.from(element.attributes).some((attribute) => !tagAttrs[attribute.name]?.has(attribute.value))) return false
-    return Array.from(element.children).every(mathIsSupported)
-  }
-  // Replace an unsupported formula as a whole, outside <math>, so the placeholder is visible instead of silently dropped.
-  for (const math of Array.from(parsed.body.getElementsByTagNameNS(mathNamespace, 'math'))) {
-    if (math.isConnected && !mathIsSupported(math)) {
-      const marker = parsed.createElement('span')
-      marker.textContent = '［此处公式无法在网页预览，请以导出文件为准］'
-      math.replaceWith(marker)
-    }
-  }
-  const walk = (parent: ParentNode) => {
-    for (const child of Array.from(parent.childNodes)) {
-      if (child.nodeType === Node.TEXT_NODE) continue
-      if (!(child instanceof Element)) { child.remove(); continue }
-      const tag = child.localName.toLowerCase()
-      const isMath = child.namespaceURI === mathNamespace
-      if (isMath ? !allowedMath.has(tag) : child.namespaceURI !== htmlNamespace || !allowedHtml.has(tag)) {
-        child.replaceWith(document.createTextNode(isMath ? '［含暂不支持的公式结构］' : child.textContent ?? ''))
-        continue
-      }
-      const safeAttrs: Record<string, string> = {}
-      if (isMath) {
-        let valid = true
-        const tagAttrs = allowedMathAttributes[tag] ?? {}
-        for (const attribute of Array.from(child.attributes)) {
-          const values = tagAttrs[attribute.name]
-          if (!values || !values.has(attribute.value)) valid = false
-          else safeAttrs[attribute.name] = attribute.value
-        }
-        if (!valid) {
-          child.replaceWith(document.createTextNode('［含暂不支持的公式属性］'))
-          continue
-        }
-      } else if (tag === 'img') {
-        const src = child.getAttribute('src') ?? ''
-        if (!/^data:image\/(?:png|jpeg|webp|gif);base64,[A-Za-z0-9+/=\r\n]+$/i.test(src)) { child.replaceWith(document.createTextNode('[配图无法安全预览]')); continue }
-        safeAttrs.src = src.replace(/\s+/g, '')
-        safeAttrs.alt = child.getAttribute('alt') ?? '题目配图'
-        for (const dimension of ['width', 'height']) {
-          const value = child.getAttribute(dimension) ?? ''
-          if (/^[1-9]\d{0,3}$/.test(value) && Number(value) <= 4096) safeAttrs[dimension] = value
-        }
-      }
-      for (const attribute of Array.from(child.attributes)) child.removeAttribute(attribute.name)
-      for (const [name, value] of Object.entries(safeAttrs)) child.setAttribute(name, value)
-      walk(child)
-    }
-  }
-  walk(parsed.body)
-  return parsed.body.innerHTML
-}
-
-function SanitizedPreview({ html }: { html: string }) {
-  const content = useMemo(() => sanitizeHtmlForPreview(html), [html])
-  const srcDoc = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'"><style>html,body{font:16px/1.8 'Noto Sans SC',sans-serif;color:#25332f;margin:0;overflow-wrap:anywhere}body{padding:8px;overflow:auto}img{max-width:100%;height:auto;vertical-align:middle}table{border-collapse:collapse;width:100%}td,th{border:1px solid #d9dfdb;padding:6px}p{margin:.4em 0}</style></head><body>${content}</body></html>`
-  const resizeToContent = (frame: HTMLIFrameElement) => {
-    const doc = frame.contentDocument
-    if (!doc) return
-    const measure = () => {
-      const height = Math.max(doc.body.scrollHeight, doc.documentElement.scrollHeight) + 4
-      frame.style.height = `${Math.min(Math.max(height, 96), 520)}px`
-    }
-    requestAnimationFrame(measure)
-    for (const image of Array.from(doc.images)) image.addEventListener('load', measure, { once: true })
-  }
-  return <iframe className="sanitized-preview-frame" title="题目预览" sandbox="allow-same-origin" srcDoc={srcDoc} onLoad={(event) => resizeToContent(event.currentTarget)} />
-}
-
 function AdminView({ onNotice }: { onNotice: (kind: Notice['kind'], text: string) => void }) {
-  const [tab, setTab] = useState<'users' | 'prompts' | 'billing'>('users')
+  const [tab, setTab] = useState<'users' | 'prompts' | 'billing' | 'bank'>('users')
   const [users, setUsers] = useState<User[]>([])
   const [prompts, setPrompts] = useState<Prompt[]>([])
   const [selectedPrompt, setSelectedPrompt] = useState<Prompt | null>(null)
@@ -1399,7 +1313,7 @@ function AdminView({ onNotice }: { onNotice: (kind: Notice['kind'], text: string
   useEffect(() => {
     let active = true
     setLoading(true)
-    if (tab === 'billing') { setLoading(false); return }
+    if (tab === 'billing' || tab === 'bank') { setLoading(false); return }
     const loader = tab === 'users' ? loadUsers : loadPrompts
     loader().catch((error) => { if (active) onNotice('error', `加载失败：${messageFor(error)}`) }).finally(() => { if (active) setLoading(false) })
     return () => { active = false }
@@ -1461,8 +1375,8 @@ function AdminView({ onNotice }: { onNotice: (kind: Notice['kind'], text: string
 
   return <>
     <div className="page-heading"><div><h1>管理设置</h1><p>仅管理员可见。</p></div></div>
-    <div className="admin-tabs"><button className={tab === 'users' ? 'active' : ''} onClick={() => setTab('users')}>教师账号</button><button className={tab === 'prompts' ? 'active' : ''} onClick={() => setTab('prompts')}>提示词</button><button className={tab === 'billing' ? 'active' : ''} onClick={() => setTab('billing')}>模型与额度</button></div>
-    {tab === 'billing' ? <AdminModelBilling onNotice={onNotice} /> : loading ? <div className="panel"><Loading label="正在加载…" /></div> : tab === 'users' ? <div className="admin-grid"><section className="panel admin-form-panel"><div className="section-heading"><h2>创建教师账号</h2></div><p className="section-intro">没有公开注册入口。教师只能看到自己名下的学生和记录。</p><form onSubmit={createUser}><Field label="登录账号"><input required maxLength={100} autoComplete="off" value={userForm.username} onChange={(e) => setUserForm({ ...userForm, username: e.target.value })} /></Field><Field label="教师显示名称"><input required maxLength={100} value={userForm.display_name} onChange={(e) => setUserForm({ ...userForm, display_name: e.target.value })} /></Field><Field label="初始密码"><input required autoComplete="new-password" type="password" value={userForm.password} onChange={(e) => setUserForm({ ...userForm, password: e.target.value })} /><small>创建后请自行告知教师；系统不保存明文密码。</small></Field><Button type="submit" disabled={saving} icon={saving ? <LoaderCircle className="spin" size={15} /> : <Plus size={15} />}>{saving ? '创建中…' : '创建账号'}</Button></form></section><section className="panel admin-users-panel"><div className="section-heading"><h2>账号（{users.length}）</h2></div>{users.length ? users.map((user) => <div className="admin-user-row" key={user.id}><span className="avatar avatar-sm">{user.display_name.slice(0, 1) || '师'}</span><span><b>{user.display_name}</b><small>{user.username}</small></span><span className="role-badge">{user.role === 'admin' ? '管理员' : '教师'}</span></div>) : <EmptyState icon={<Users />} title="暂无账号" detail="在左侧创建教师账号。" />}</section></div> : <PromptAdmin prompts={prompts} selected={selectedPrompt} onSelect={setSelectedPrompt} body={promptBody} onBody={setPromptBody} onSave={savePrompt} onHistory={openHistory} saving={saving} />}
+    <div className="admin-tabs"><button className={tab === 'users' ? 'active' : ''} onClick={() => setTab('users')}>教师账号</button><button className={tab === 'prompts' ? 'active' : ''} onClick={() => setTab('prompts')}>提示词</button><button className={tab === 'billing' ? 'active' : ''} onClick={() => setTab('billing')}>模型与额度</button><button className={tab === 'bank' ? 'active' : ''} onClick={() => setTab('bank')}>题库</button></div>
+    {tab === 'bank' ? <AdminBank onNotice={onNotice} /> : tab === 'billing' ? <AdminModelBilling onNotice={onNotice} /> : loading ? <div className="panel"><Loading label="正在加载…" /></div> : tab === 'users' ? <div className="admin-grid"><section className="panel admin-form-panel"><div className="section-heading"><h2>创建教师账号</h2></div><p className="section-intro">没有公开注册入口。教师只能看到自己名下的学生和记录。</p><form onSubmit={createUser}><Field label="登录账号"><input required maxLength={100} autoComplete="off" value={userForm.username} onChange={(e) => setUserForm({ ...userForm, username: e.target.value })} /></Field><Field label="教师显示名称"><input required maxLength={100} value={userForm.display_name} onChange={(e) => setUserForm({ ...userForm, display_name: e.target.value })} /></Field><Field label="初始密码"><input required autoComplete="new-password" type="password" value={userForm.password} onChange={(e) => setUserForm({ ...userForm, password: e.target.value })} /><small>创建后请自行告知教师；系统不保存明文密码。</small></Field><Button type="submit" disabled={saving} icon={saving ? <LoaderCircle className="spin" size={15} /> : <Plus size={15} />}>{saving ? '创建中…' : '创建账号'}</Button></form></section><section className="panel admin-users-panel"><div className="section-heading"><h2>账号（{users.length}）</h2></div>{users.length ? users.map((user) => <div className="admin-user-row" key={user.id}><span className="avatar avatar-sm">{user.display_name.slice(0, 1) || '师'}</span><span><b>{user.display_name}</b><small>{user.username}</small></span><span className="role-badge">{user.role === 'admin' ? '管理员' : '教师'}</span></div>) : <EmptyState icon={<Users />} title="暂无账号" detail="在左侧创建教师账号。" />}</section></div> : <PromptAdmin prompts={prompts} selected={selectedPrompt} onSelect={setSelectedPrompt} body={promptBody} onBody={setPromptBody} onSave={savePrompt} onHistory={openHistory} saving={saving} />}
     {showHistory && <ModalFrame className="modal-card history-modal" labelledBy="history-title" onClose={() => setShowHistory(false)}><div className="section-heading"><div><h2 id="history-title">{selectedPrompt?.label}：历史版本</h2></div><button className="icon-button" onClick={() => setShowHistory(false)} aria-label="关闭"><X size={17} /></button></div><p className="section-intro">启用旧版本会复制其内容生成一个新版本，历史记录不会被覆盖。</p><div className="history-list">{history.map((item) => <div className={`history-row ${item.revision === selectedPrompt?.active_revision ? 'active' : ''}`} key={String(item.revision)}><div><b>版本 {String(item.revision)} {item.revision === selectedPrompt?.active_revision && <span className="active-label">使用中</span>}</b><small>{item.created_at ? dateLabel(item.created_at) : '时间未记录'} · {item.created_by || '系统'}</small><pre>{item.body}</pre></div>{item.revision !== selectedPrompt?.active_revision && <Button size="sm" variant="secondary" onClick={() => void activateRevision(item)} disabled={saving} icon={<RotateCcw size={14} />}>启用此版本</Button>}</div>)}</div></ModalFrame>}
   </>
 }

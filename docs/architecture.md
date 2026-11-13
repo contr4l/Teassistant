@@ -185,3 +185,8 @@ Teassistant/
 LaTeX PDF 为独立来源导出路径：`latex_contracts.py` 将公式目录绑定原生对象完整哈希和选题快照；`math_latex.py` 严格解析支持的 MTEF/OMML 数学结构并转换为数学 LaTeX；`latex_exporting.py` 排版文本、表格与原几何图并实际调用 XeLaTeX。禁止原公式预览代替本路径的数学结构，未知记录、字符或编译缺字须失败。`export_latex_practice.py` 对同一快照生成两种版式并整体原子发布；原 Word 路径保持独立。工具安装、覆盖范围及实际证据见 `latex-export.md`。
 
 部署题库由 `package_question_bank.py` 生成自包含source/semantic/evidence及manifest：副本provenance可使用相对包根（semantic目录的父级）的run路径，限制在根内，仍逐call核对原始SHA及结果，原绝对同根路径兼容。打包检查assessed证据完整、目标不覆盖/不写输入或引用run内，原/新逐题可用状态原因一致后发布，不能通过原新同样损坏来绕过验真。首次本地部署及下载元数据修复见 `acceptance/local-deployment-v1-execution.md`。
+
+
+## 管理员题库版本（2026-11-14）
+
+管理员工作流通过受保护的题库API读取来源/语义/证据。配置的只读挂载保留为种子；新Word资料与既有原件合并后在共享私有卷构建不可变包，使用DeepSeek现有计量通路全库重评。共享数据库bank_state记录当前包、管理员元数据覆盖及历史，不修改原AI响应。Worker完成导入与切换当前题库指针使用同一事务及租约/版本CAS；练习提交固定题库版本，API/Worker解析同一有效题库，防止展示调整与实际组卷不一致。失败或并发冲突保持旧版。使用与验证边界见[管理员题库指南](admin-question-bank.md)及[合同](acceptance/admin-bank-v1-contract.md)。

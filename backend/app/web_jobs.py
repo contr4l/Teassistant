@@ -59,7 +59,11 @@ def _curriculum(settings):
     return Curriculum.model_validate_json(settings.curriculum_path.read_bytes())
 
 
-def _bank(settings):
+def _bank(settings, store=None):
+    if store is not None:
+        from app.admin_bank import load_bank
+
+        return load_bank(store, settings)
     if settings.bank_dir is None or settings.semantic_dir is None:
         raise JobInputError("尚未配置可组卷题库，请由管理员设置题库与语义目录")
     bank = load_practice_bank(settings.bank_dir, settings.semantic_dir)
@@ -86,7 +90,7 @@ def _progress(row, curriculum):
 
 
 def get_inventory(store, settings, owner_id, student_id):
-    bank = _bank(settings)
+    bank = _bank(settings, store)
     curriculum = _curriculum(settings)
     index = CurriculumIndex(curriculum)
     progress = _progress(_student(store, owner_id, student_id), curriculum)
@@ -117,6 +121,15 @@ def get_inventory(store, settings, owner_id, student_id):
 
 def build_job_input(store, settings, kind, resource_record):
     """Capture materials, progress, analysis and editable prompt versions at submit."""
+    if kind == "bank_import":
+        from app.admin_bank import state
+
+        return {
+            **copy.deepcopy(resource_record["data"]),
+            "resource_revision": resource_record["revision"],
+            "bank_revision": state(store)["revision"],
+            "curriculum_sha256": _sha(settings.curriculum_path),
+        }
     owner = resource_record["owner_id"]
     data = resource_record["data"]
     student = _student(store, owner, data["student_id"])
@@ -166,13 +179,18 @@ def build_job_input(store, settings, kind, resource_record):
             raise JobInputError("练习题数须大于零")
         CurriculumIndex(curriculum).validate_ids([q.point_id for q in request.quotas])
         result["request"] = request.model_dump(mode="json")
+        from app.admin_bank import effective_settings, state
+
+        bank_state = state(store)
+        active = effective_settings(store, settings, snapshot=bank_state)
+        result["bank_revision"] = bank_state["revision"]
         result["bank_sources_sha256"] = {
-            "bank": _sha(settings.bank_dir / "bank.json") if settings.bank_dir else None,
-            "semantic": _sha(settings.semantic_dir / "annotations.json")
-            if settings.semantic_dir
+            "bank": _sha(active.bank_dir / "bank.json") if active.bank_dir else None,
+            "semantic": _sha(active.semantic_dir / "annotations.json")
+            if active.semantic_dir
             else None,
         }
-        _bank(settings)
+        _bank(settings, store)
         result["analysis_snapshots"] = []
         for exam_id in data.get("exam_ids", []):
             exam = store.get_record("exam", exam_id, owner)
@@ -197,12 +215,25 @@ def build_job_input(store, settings, kind, resource_record):
 
 def _verify_inputs(store, settings, job):
     frozen = job["input_data"]
-    kind = "practice" if job["kind"] == "practice" else "exam"
+    kind = _resource_kind(job["kind"])
     resource = store.get_record(kind, job["resource_id"], job["owner_id"])
     if resource is None or resource["revision"] != frozen["resource_revision"]:
         raise JobInputError("考试或练习版本已变化，请刷新后重新提交")
     if _sha(settings.curriculum_path) != frozen["curriculum_sha256"]:
         raise JobInputError("考点目录已变化，请重新提交")
+    if job["kind"] in {"practice", "bank_import"}:
+        from app.admin_bank import effective_settings, state
+
+        bank_state = state(store)
+        # Pre-management jobs can only refer to the untouched initial seed.
+        if bank_state["revision"] != frozen.get("bank_revision", 1):
+            raise JobInputError("题库已变化，请刷新后重新提交")
+        settings = effective_settings(store, settings, snapshot=bank_state)
+    if job["kind"] == "bank_import":
+        for file in frozen["files"]:
+            if _sha(private_file(settings, file["path"])) != file["sha256"]:
+                raise JobInputError("题库上传文件已变化，请重新上传")
+        return
     if job["kind"] == "practice":
         student = _student(store, job["owner_id"], frozen["student_id"])
         progress = _progress(student, _curriculum(settings))
@@ -545,13 +576,15 @@ def _preview(snapshot, bank_dir, curriculum):
 
 
 def _practice(store, settings, job, directory):
+    from app.admin_bank import effective_settings
     from app.exporting import ExportError
     from app.source_exporting import export_bank_snapshot
 
+    settings = effective_settings(store, settings)
     frozen = job["input_data"]
     curriculum = _curriculum(settings)
     student = _student(store, job["owner_id"], frozen["student_id"])
-    bank = _bank(settings)
+    bank = _bank(settings, store)
     snapshot = build_bank_practice(
         bank,
         curriculum,
@@ -651,6 +684,26 @@ def _practice(store, settings, job, directory):
     )
 
 
+def _resource_kind(kind):
+    return {"practice": "practice", "bank_import": "bank_import"}.get(kind, "exam")
+
+
+def _bank_import(store, settings, job, directory):
+    from app.admin_bank import effective_settings, prepare_import_publication
+    from app.admin_bank_ingest import process_import
+
+    active = effective_settings(store, settings)
+    result = process_import(store, settings, job, directory, base_bank_dir=active.bank_dir)
+    publication = prepare_import_publication(
+        store, settings, result["package_path"], job["input_data"]["bank_revision"],
+        job["owner_id"], job["input_data"]["reason"],
+    )
+    public_result = {k: v for k, v in result.items() if k != "package_path"}
+    public_result["_bank_publication"] = publication
+    data = {**copy.deepcopy(job["input_data"]), "status": "completed"}
+    return public_result, data, "completed"
+
+
 def execute_job(store, settings, job):
     _verify_inputs(store, settings, job)
     if not all(
@@ -659,7 +712,8 @@ def execute_job(store, settings, job):
         raise JobInputError("invalid task identity")
     directory = settings.data_dir / "jobs" / job["id"] / job["lease_token"]
     directory.mkdir(parents=True, exist_ok=False)
-    handler = {"analysis": _analysis, "practice": _practice, "correction": _correction}[job["kind"]]
+    handler = {"analysis": _analysis, "practice": _practice,
+               "correction": _correction, "bank_import": _bank_import}[job["kind"]]
     result, data, status = handler(store, settings, job, directory)
     _verify_inputs(store, settings, job)
     return result, data, status
@@ -678,14 +732,21 @@ def run_once(store, settings, worker_id):
 
     thread = threading.Thread(target=heartbeat, daemon=True)
     thread.start()
-    kind = "practice" if job["kind"] == "practice" else "exam"
+    kind = _resource_kind(job["kind"])
     record = store.get_record(kind, job["resource_id"], job["owner_id"])
     try:
         result, data, status = execute_job(store, settings, job)
+        bank_publication = result.pop("_bank_publication", None)
         # Finish and pointer publication share one DB transaction and lease CAS.
         guards = []
         if job["kind"] == "practice":
             frozen = job["input_data"]
+            from app.admin_bank import STATE_ID, STATE_OWNER
+
+            guards.append({
+                "kind": "bank_state", "record_id": STATE_ID, "owner_id": STATE_OWNER,
+                "revision": frozen.get("bank_revision", 1),
+            })
             guards.append(
                 {
                     "kind": "student",
@@ -716,6 +777,7 @@ def run_once(store, settings, worker_id):
                 "expected_revision": job["input_data"]["resource_revision"],
             },
             guards=guards,
+            additional_resource_updates=[bank_publication] if bank_publication else None,
         )
         if not published:
             store.finish_job(
@@ -723,7 +785,7 @@ def run_once(store, settings, worker_id):
                 job["lease_token"],
                 None,
                 status="failed",
-                error="学生进度或考试资料已更新，本次结果未发布，请刷新后重新提交",
+                error="资料、教学进度或题库版本已更新，本次结果未发布，请刷新后重新提交",
             )
     except Exception as exc:
         # Detailed diagnostics stay private; never return provider keys or raw text.
@@ -735,13 +797,16 @@ def run_once(store, settings, worker_id):
                 if os.getenv(key):
                     diagnostic = diagnostic.replace(os.environ[key], "[REDACTED]")
             (location / (job["id"] + ".log")).write_text(diagnostic)
+        from app.admin_bank import BankError
+        from app.admin_bank_ingest import AdminBankImportError
         from app.model_billing import BillingError
         from app.model_runtime import MeteringError
         from app.model_settings import ModelSettingsError
 
         public = (
             str(exc)
-            if isinstance(exc, (JobInputError, BillingError, MeteringError, ModelSettingsError))
+            if isinstance(exc, (JobInputError, BillingError, MeteringError, ModelSettingsError,
+                                BankError, AdminBankImportError))
             and not any(s in str(exc) for s in ("/Users/", "sk-", "Bearer ", "api_key"))
             else "任务处理失败，请检查模型或导出配置后重试"
         )

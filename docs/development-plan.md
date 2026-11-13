@@ -170,3 +170,6 @@ DEV-101/105/502 容器与持续集成批次：统一生产镜像和独立部署�
 2026-11-12本地部署试跑：注册表仍超时，完整应用镜像未实建；采用明确标注的本机API/Worker+缓存PG容器替代提供检查入口，实测真实PostgreSQL、可迁移200/176题库包、两种实际导出、下载元数据与重启持久化。新增题库打包步骤保留run/call证据与原SHA门禁，不以挂载JSON存在代替库存可用。见 [执行证据](acceptance/local-deployment-v1-execution.md)；不将其记为完整Docker或教师价值通过。
 
 ROCK 5B ARM64/8GB部署准备补充：`deploy.py bootstrap`提供配置/构建/启动及私有stdin预设账号初始化，原子创建并保留已有账号与额度；初始化入口已经离线和隔离真实PG验证，源码同步、板上实际arm64镜像与完整业务验证仍单列未完成。见 [板上指南](rock5b-deployment.md) 和 [执行记录](acceptance/board-bootstrap-v1-execution.md)。
+
+
+DEV-205/FR-19 管理员题库批次（2026-11-14）：用户确认以原始Word原卷/解析上传作为首批更新入口，补齐题库搜索预览、程序检查、标签/难度/启停调整及历史恢复。后台任务全库重评与来源证据校验后自动生效，不增加人工审核；新依赖Playwright/Chromium进入生产导出环境。实现、合成HTTP计费/Worker集成、真实种子库浏览、浏览器与板上升级结果分别取证，不能仅以前端构建证明自动入库或老师价值。见[管理员题库指南](admin-question-bank.md)。

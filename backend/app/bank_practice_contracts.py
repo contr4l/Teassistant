@@ -15,6 +15,19 @@ class SourceDocument(Contract):
     sha256: str
 
 
+class AdminBankAdjustment(Contract):
+    source: Literal["admin_override"] = "admin_override"
+    base_revision: str
+    actor_id: str = Field(min_length=1, max_length=32)
+    created_at: str
+    reason: str = Field(min_length=1, max_length=500)
+    note: str = Field(default="", max_length=2000)
+    enabled: bool
+    point_ids: list[str]
+    prerequisite_ids: list[str]
+    difficulty_score: int = Field(ge=0, le=100, strict=True)
+
+
 class BankQuestion(Contract):
     id: str
     revision: str
@@ -34,6 +47,7 @@ class BankQuestion(Contract):
     semantic_payload: dict[str, Any]
     documents: list[SourceDocument]
     asset_hashes: dict[str, str]
+    admin_adjustment: AdminBankAdjustment | None = None
 
     @model_validator(mode="after")
     def consistency(self):
@@ -43,6 +57,29 @@ class BankQuestion(Contract):
             raise ValueError("source question snapshot changed")
         if canonical_hash(self.semantic_payload) != self.semantic_hash:
             raise ValueError("semantic snapshot changed")
+        adjustment = self.admin_adjustment
+        base_revision = canonical_hash(
+            {"source_hash": self.source_hash, "semantic_hash": self.semantic_hash}
+        )
+        if adjustment is not None:
+            if adjustment.base_revision != base_revision or self.revision != canonical_hash(
+                {"base_revision": base_revision, "adjustment": adjustment.model_dump(mode="json")}
+            ):
+                raise ValueError("administrator adjustment does not match source revision")
+            if (
+                self.point_ids != adjustment.point_ids
+                or self.prerequisite_ids != adjustment.prerequisite_ids
+                or self.difficulty_score != adjustment.difficulty_score
+                or len(set(self.point_ids)) != len(self.point_ids)
+                or len(set(self.prerequisite_ids)) != len(self.prerequisite_ids)
+                or set(self.point_ids) & set(self.prerequisite_ids)
+                or not self.point_ids
+            ):
+                raise ValueError("administrator metadata differs from effective question")
+            if not adjustment.enabled and (
+                self.status != "blocked" or "admin_disabled" not in self.block_reasons
+            ):
+                raise ValueError("disabled question cannot be eligible")
         if self.status == "eligible":
             if (
                 self.block_reasons
@@ -65,9 +102,14 @@ class BankQuestion(Contract):
                 or assessment.get("status") != "assessed"
                 or assessment.get("question_id") != self.id
                 or assessment.get("warnings")
-                or assessment.get("point_ids") != self.point_ids
-                or assessment.get("prerequisite_ids") != self.prerequisite_ids
-                or assessment.get("difficulty_score") != self.difficulty_score
+                or (
+                    adjustment is None
+                    and (
+                        assessment.get("point_ids") != self.point_ids
+                        or assessment.get("prerequisite_ids") != self.prerequisite_ids
+                        or assessment.get("difficulty_score") != self.difficulty_score
+                    )
+                )
             ):
                 raise ValueError("eligible semantic metadata differs or has warnings")
         elif not self.block_reasons:

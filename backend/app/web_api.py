@@ -545,9 +545,12 @@ def create_app(settings: WebSettings | None = None, store: Store | None = None) 
 
     @app.get("/api/capabilities")
     def capabilities(_identity: dict[str, Any] = Depends(current_identity)):
+        from app.admin_bank import effective_settings
+
+        active = effective_settings(store, settings)
         return {
             "allow_codex": bool(settings.allow_codex),
-            "bank_configured": bool(settings.bank_dir and settings.semantic_dir),
+            "bank_configured": bool(active.bank_dir and active.semantic_dir),
         }
 
     @app.get("/api/curriculum")
@@ -895,7 +898,10 @@ def create_app(settings: WebSettings | None = None, store: Store | None = None) 
 
     @app.get("/api/inventory")
     def inventory(student_id: str, identity: dict[str, Any] = Depends(current_identity)):
-        if not settings.bank_dir or not settings.semantic_dir:
+        from app.admin_bank import effective_settings
+
+        active = effective_settings(store, settings)
+        if not active.bank_dir or not active.semantic_dir:
             _http_error(409, "practice bank is not configured")
         owner_id = identity["user"]["id"]
         student = owner_record("student", student_id, owner_id)
@@ -921,7 +927,10 @@ def create_app(settings: WebSettings | None = None, store: Store | None = None) 
     ):
         owner_id = identity["user"]["id"]
         student = owner_record("student", payload.student_id, owner_id)
-        if not settings.bank_dir or not settings.semantic_dir:
+        from app.admin_bank import effective_settings
+
+        active = effective_settings(store, settings)
+        if not active.bank_dir or not active.semantic_dir:
             _http_error(409, "practice bank is not configured")
         if len(payload.exam_ids) != len(set(payload.exam_ids)):
             _http_error(422, "exam identifiers must be unique")
@@ -1251,6 +1260,10 @@ def create_app(settings: WebSettings | None = None, store: Store | None = None) 
             )
         except StoreNotFound:
             _http_error(404, "prompt or revision not found")
+
+    from app.admin_bank_api import install_bank_routes
+
+    install_bank_routes(app, store, settings, admin_identity, write_admin_identity)
 
     frontend = Path(settings.frontend_dist)
     if frontend.is_dir():

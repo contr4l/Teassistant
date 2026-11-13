@@ -728,6 +728,7 @@ class Store:
         error: str | None = None,
         resource_update: dict[str, Any] | None = None,
         guards: list[dict[str, Any]] | None = None,
+        additional_resource_updates: list[dict[str, Any]] | None = None,
     ) -> bool:
         if status not in {"completed", "partial", "failed"}:
             raise ValueError("invalid terminal job status")
@@ -776,7 +777,14 @@ class Store:
                 )
                 if guarded is None:
                     return False
-            if resource_update is not None:
+            publications = ([resource_update] if resource_update is not None else []) + (
+                additional_resource_updates or []
+            )
+            identities = [(r.get("kind"), r.get("record_id"), r.get("owner_id"))
+                          for r in publications]
+            if len(identities) != len(set(identities)):
+                raise ValueError("duplicate resource publication")
+            for resource_update in publications:
                 kind = resource_update.get("kind")
                 record_id = resource_update.get("record_id")
                 owner_id = resource_update.get("owner_id")
@@ -800,6 +808,8 @@ class Store:
                     )
                 )
                 if changed.rowcount != 1:
+                    # A later CAS failure must roll back all earlier publications too.
+                    session.rollback()
                     return False
             job.status = status
             job.result = result

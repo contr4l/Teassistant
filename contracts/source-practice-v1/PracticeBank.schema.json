@@ -1,5 +1,78 @@
 {
   "$defs": {
+    "AdminBankAdjustment": {
+      "additionalProperties": false,
+      "properties": {
+        "source": {
+          "const": "admin_override",
+          "default": "admin_override",
+          "title": "Source",
+          "type": "string"
+        },
+        "base_revision": {
+          "title": "Base Revision",
+          "type": "string"
+        },
+        "actor_id": {
+          "maxLength": 32,
+          "minLength": 1,
+          "title": "Actor Id",
+          "type": "string"
+        },
+        "created_at": {
+          "title": "Created At",
+          "type": "string"
+        },
+        "reason": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        },
+        "note": {
+          "default": "",
+          "maxLength": 2000,
+          "title": "Note",
+          "type": "string"
+        },
+        "enabled": {
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "point_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Point Ids",
+          "type": "array"
+        },
+        "prerequisite_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Prerequisite Ids",
+          "type": "array"
+        },
+        "difficulty_score": {
+          "maximum": 100,
+          "minimum": 0,
+          "title": "Difficulty Score",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "base_revision",
+        "actor_id",
+        "created_at",
+        "reason",
+        "enabled",
+        "point_ids",
+        "prerequisite_ids",
+        "difficulty_score"
+      ],
+      "title": "AdminBankAdjustment",
+      "type": "object"
+    },
     "BankQuestion": {
       "additionalProperties": false,
       "properties": {
@@ -108,6 +181,17 @@
           },
           "title": "Asset Hashes",
           "type": "object"
+        },
+        "admin_adjustment": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AdminBankAdjustment"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "required": [

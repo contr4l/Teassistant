@@ -764,6 +764,7 @@ dev = [
 ]
 export = [
     { name = "mathtypejx" },
+    { name = "playwright" },
     { name = "pypandoc-binary" },
 ]
 
@@ -794,6 +795,7 @@ dev = [
 ]
 export = [
     { name = "mathtypejx", git = "https://github.com/uwjiaoxing/mathtype2omml?rev=7f1b46358a3a7b0b5c992faa0dca91740a54efbb" },
+    { name = "playwright", specifier = ">=1.50,<2" },
     { name = "pypandoc-binary", specifier = ">=1.17,<2" },
 ]
 

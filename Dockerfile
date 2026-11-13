@@ -16,7 +16,9 @@ COPY pyproject.toml uv.lock ./
 ENV UV_PROJECT_ENVIRONMENT=/app/.venv \
     UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy
-RUN uv sync --locked --no-dev --group export --no-install-project
+# Scope Git's HTTP/1.1 workaround to dependency installation behind HTTP/2 proxies.
+RUN GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.version GIT_CONFIG_VALUE_0=HTTP/1.1 \
+    uv sync --locked --no-dev --group export --no-install-project
 
 FROM python:3.13-slim-bookworm AS runtime
 ARG VCS_REF=unknown
@@ -25,6 +27,7 @@ LABEL org.opencontainers.image.source="https://github.com/contr4l/Teassistant" \
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
+        chromium \
         fontconfig \
         fonts-noto-cjk \
         libreoffice-writer \
@@ -60,6 +63,7 @@ ENV HOME=/app/work/home \
     TEASSISTANT_MODEL_PROVIDER=deepseek \
     TEASSISTANT_SOFFICE=/usr/bin/libreoffice \
     TEASSISTANT_XELATEX=/usr/bin/xelatex \
+    TEASSISTANT_CHROMIUM=/usr/bin/chromium \
     TEXMFCONFIG=/app/work/texmf-config \
     TEXMFVAR=/app/work/texmf-var \
     XDG_CACHE_HOME=/app/work/cache

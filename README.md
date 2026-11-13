@@ -27,6 +27,7 @@
 - [学生考卷与学情分析](docs/exam-analysis.md)：材料处理、手写识别、题答关联、局部修正、近期考试汇总及私有报告入口。
 - [教师网页与提示词管理](docs/web-application.md)：本地启动、初始化管理员、持久任务、手机上传及单服务器部署。
 - [管理员模型与累计额度](docs/admin-model-billing.md)：网页设置 DeepSeek、昨日用户估算排行、追加额度与未知预占核实。
+- [管理员题库工作流](docs/admin-question-bank.md)：原始Word上传、自动加工、搜索预览、考点难度调整、启停、程序检查与版本恢复。
 
 ## Docker 单机部署
 

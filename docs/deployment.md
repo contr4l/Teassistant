@@ -47,6 +47,8 @@ python3 scripts/deploy.py admin --username your-admin --display-name 管理员
 
 ## 接入题库
 
+管理员网页也可从“管理设置 → 题库”上传原始Word原卷与解析，自动生成持久版本并更新后续组卷；见[管理员题库指南](admin-question-bank.md)。生产镜像需要本批新增的Playwright和Chromium，旧镜像应重建并同时更新API/Worker。网页生成的题库保存在共享私有卷，由数据库版本指针选择，不能只备份或迁移种子挂载目录。
+
 挂载的是已加工的来源库、对应语义目录及验真证据，不是未经处理的原题文件夹。不能只复制两个JSON目录：旧语义结果可能引用开发机绝对路径，缺失调用证据会使候选被阻断。先用打包命令生成新的自包含目录（输出必须不存在，不覆盖原始资料）：
 
 ```bash
@@ -101,6 +103,14 @@ python3 scripts/deploy.py up
 ```
 
 更新采用同样两条命令；up 不自动构建。建议固定版本标签/digest，使用浮动分支标签会降低回退可复现性。镜像架构必须与服务器相符；已验证和未验证的架构以本批验收记录及发布说明为准，不因 Dockerfile 可构建就宣称全部平台已验证。
+
+## 构建期间的代理与 GitHub 下载
+
+Docker服务、Compose/BuildKit客户端认证、Dockerfile中RUN步骤的联网是不同路径。仅在systemd设置Docker服务代理，不代表当前终端的认证请求或容器内Git、apt、pnpm均使用代理；当前终端的代理也不会自动成为所有RUN步骤的构建参数。应按实际失败阶段检查，使用标准代理构建参数配置RUN步骤，避免把代理地址或凭据通过ENV写入最终镜像。不要覆盖现有Docker客户端配置中的认证信息。
+
+若安装`mathtypejx`时出现`curl 16 Error in the HTTP2 framing layer`，实际失败发生于容器内Git拉取锁定提交。Dockerfile在`uv sync`这一RUN步骤中通过`GIT_CONFIG_COUNT`设置`http.version=HTTP/1.1`；该配置传递给uv启动的Git子进程，不修改依赖提交、锁文件或宿主机全局Git配置。此项规避HTTP/2传输问题，不保证网络可达；重试构建仍需确认代理及GitHub连接。修改宿主机`git config --global`不能自动改变构建容器内的Git配置。
+
+参考：[Git配置](https://git-scm.com/docs/git-config)、[Docker构建代理](https://docs.docker.com/engine/cli/proxy/)。ARM64完整构建与运行结果须以板上实际执行为准。
 
 ## 对外访问与 HTTPS
 
