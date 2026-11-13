@@ -86,6 +86,49 @@ def test_chromium_fixture_refuses_missing_executable(tmp_path, monkeypatch):
     assert not output.exists()
 
 
+def test_failure_annotation_reports_stage_without_exception_payload(monkeypatch, capsys):
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+
+    def fail(*_args, **_kwargs):
+        def operation():
+            raise RuntimeError("SYNTHETIC_SECRET\n::error::injected")
+        smoke._at_stage("web workflow", operation)
+
+    monkeypatch.setattr(smoke, "run_smoke", fail)
+    assert smoke.main(["--image", "synthetic:local"]) == 2
+    output = capsys.readouterr().err
+    assert "::error title=Container smoke failure::stage=web workflow" in output
+    assert "RuntimeError" in output
+    assert "SYNTHETIC_SECRET" not in output and "injected" not in output
+
+
+def test_cleanup_failure_preserves_original_stage(monkeypatch, tmp_path, capsys):
+    def execute(command, **_kwargs):
+        if command[1:3] == ["image", "inspect"]:
+            return "linux/arm64\n"
+        if "down" in command:
+            raise RuntimeError("SYNTHETIC_CLEANUP_SECRET")
+        if "up" in command:
+            raise smoke.SmokeCommandError(17)
+        return ""
+
+    monkeypatch.setattr(smoke.shutil, "which", lambda _name: "/synthetic/docker")
+    monkeypatch.setattr(smoke, "_run", execute)
+    report = tmp_path / "report.json"
+    with pytest.raises(smoke.SmokeStageError, match="stage=service startup.*exit=17"):
+        smoke.run_smoke("synthetic:local", report_path=report)
+    assert not report.exists()
+    diagnostic = capsys.readouterr().err
+    assert "stage=cleanup" in diagnostic and "SYNTHETIC_CLEANUP_SECRET" not in diagnostic
+
+
+def test_known_static_failure_hint_is_reported_without_command_output():
+    error = smoke.SmokeStageError("web workflow", RuntimeError("synthetic admin login failed"))
+    assert "hint=synthetic admin login failed" in error.summary
+    error = smoke.SmokeStageError("service startup", smoke.SmokeCommandError(9))
+    assert error.summary == "stage=service startup; error=SmokeCommandError; exit=9"
+
+
 def test_command_runner_uses_argv_without_shell(monkeypatch):
     captured = {}
 

@@ -22,6 +22,44 @@ from pathlib import Path
 from typing import Any
 
 _IMAGE_REF = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,254}$")
+_SAFE_FAILURE_HINTS = frozenset({
+    "container API did not become ready",
+    "smoke API port is not loopback-bound",
+    "synthetic admin login failed",
+    "synthetic student creation failed",
+    "synthetic exam creation failed",
+    "synthetic exam asset upload failed",
+    "synthetic analysis did not enter the persistent queue",
+    "queued job could not be read",
+    "no-credential analysis job did not fail closed",
+    "synthetic feedback persistence failed",
+    "synthetic feedback was not read back",
+})
+
+
+class SmokeCommandError(RuntimeError):
+    def __init__(self, exit_code: int):
+        self.exit_code = exit_code
+        super().__init__(f"container smoke command failed (exit {exit_code})")
+
+
+class SmokeStageError(RuntimeError):
+    """Controlled diagnostic without subprocess output, credentials or input paths."""
+
+    def __init__(self, stage: str, error: Exception):
+        self.summary = f"stage={stage}; error={type(error).__name__}"
+        if isinstance(error, SmokeCommandError):
+            self.summary += f"; exit={error.exit_code}"
+        elif type(error) is RuntimeError and str(error) in _SAFE_FAILURE_HINTS:
+            self.summary += f"; hint={error}"
+        super().__init__(self.summary)
+
+
+def _at_stage(stage, operation, *args, **kwargs):
+    try:
+        return operation(*args, **kwargs)
+    except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as exc:
+        raise SmokeStageError(stage, exc) from exc
 
 
 def _validate_image(image: str) -> str:
@@ -120,7 +158,7 @@ def _run(command: list[str], *, timeout: int, input_text: str | None = None) -> 
         check=False,
     )
     if result.returncode:
-        raise RuntimeError(f"container smoke command failed (exit {result.returncode})")
+        raise SmokeCommandError(result.returncode)
     return result.stdout
 
 
@@ -438,7 +476,8 @@ def run_smoke(
     )
     if not docker:
         raise ValueError("Docker executable was not found")
-    platform = _run(
+    platform = _at_stage(
+        "image inspection", _run,
         [docker, "image", "inspect", "--format", "{{.Os}}/{{.Architecture}}", image],
         timeout=30,
     ).strip()
@@ -460,10 +499,14 @@ def run_smoke(
             "model_credentials": "none",
         }
         try:
-            _run(compose + ["run", "--rm", "-T", "init"], timeout=60)
-            _run(compose + ["up", "--detach", "--wait", "postgres", "api", "worker"], timeout=120)
-            result["web_workflow"] = _api_smoke(compose, timeout_seconds)
-            chromium = _run(
+            _at_stage("database initialization", _run,
+                      compose + ["run", "--rm", "-T", "init"], timeout=60)
+            _at_stage("service startup", _run,
+                      compose + ["up", "--detach", "--wait", "postgres", "api", "worker"],
+                      timeout=120)
+            result["web_workflow"] = _at_stage("web workflow", _api_smoke, compose, timeout_seconds)
+            chromium = _at_stage(
+                "Chromium render", _run,
                 compose + [
                     "run", "--rm", "-T", "--no-deps", "api", "/app/.venv/bin/python",
                     "/app/scripts/container_smoke_fixture.py", "chromium",
@@ -471,7 +514,8 @@ def run_smoke(
                 ],
                 timeout=90,
             )
-            word = _run(
+            word = _at_stage(
+                "Word export", _run,
                 compose
                 + [
                     "run",
@@ -487,7 +531,8 @@ def run_smoke(
                 ],
                 timeout=240,
             )
-            latex = _run(
+            latex = _at_stage(
+                "LaTeX export", _run,
                 compose
                 + [
                     "run",
@@ -507,7 +552,14 @@ def run_smoke(
             result["synthetic_chromium_render"] = json.loads(chromium.strip().splitlines()[-1])
             result["synthetic_latex_export"] = json.loads(latex.strip().splitlines()[-1])
         finally:
-            _run(compose + ["down", "--volumes", "--remove-orphans"], timeout=45)
+            already_failing = sys.exc_info()[0] is not None
+            try:
+                _at_stage("cleanup", _run,
+                          compose + ["down", "--volumes", "--remove-orphans"], timeout=45)
+            except SmokeStageError as cleanup_error:
+                if not already_failing:
+                    raise
+                print(f"container smoke cleanup failed: {cleanup_error.summary}", file=sys.stderr)
         if report_path is not None:
             report_path.parent.mkdir(parents=True, exist_ok=True)
             temporary = report_path.with_name(f".{report_path.name}.{secrets.token_hex(4)}.tmp")
@@ -532,6 +584,11 @@ def main(argv: list[str] | None = None) -> int:
             timeout_seconds=args.timeout_seconds,
             report_path=args.report,
         )
+    except SmokeStageError as exc:
+        print(f"container smoke failed: {exc.summary}", file=sys.stderr)
+        if os.environ.get("GITHUB_ACTIONS") == "true":
+            print(f"::error title=Container smoke failure::{exc.summary}", file=sys.stderr)
+        return 2
     except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as exc:
         print(f"container smoke failed: {type(exc).__name__}", file=sys.stderr)
         return 2

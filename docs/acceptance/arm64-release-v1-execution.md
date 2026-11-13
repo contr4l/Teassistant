@@ -22,8 +22,22 @@ manifest 反例包含缺 ARM、重复平台、额外 attestation、错误 OS、�
 
 ## 尚未执行
 
-本批尚未提交或推送，未运行真实 GitHub Actions、Docker 原生双架构构建、GHCR 发布/下载或 ROCK 5B 健康检查。因此当前仅为离线配置及回归验证，不表示已有新的可拉取镜像。
+初次离线验收时尚未提交推送；下文记录随后用户授权的真实云端结果。GHCR 发布/下载及 ROCK 5B 健康检查仍未完成，不表示已有新的可拉取镜像。
 
 首次发布需仓库允许相应 Actions 和 ARM64 runner，且包发布权限有效。GHCR 包可见性不自动更改；私有包下载需用户自行登录具备 `read:packages` 的凭据。正式使用以成功 workflow 的镜像引用为准，推荐固定 digest；跨标签推送不具备原子性。
 
 容器冒烟使用合成材料及隔离网络，不调用真实 DeepSeek，也不证明学生卷面识别质量或教师价值。
+
+## 首次真实云端构建与诊断补充
+
+用户随后明确授权推送并等待构建。`b220ad2e0ac4f8d168616082cbbaaff17c8ecf96` 已推送 main，[Actions 43486640073](https://github.com/contr4l/Teassistant/actions/runs/43486640073) 结果为 failure：前后端检查通过，两种原生架构的 Docker 镜像均构建成功；AMD64 的容器冒烟用时 30 秒、ARM64 用时 31 秒，均失败。受信发布任务被阻止，未发布正式多架构镜像。
+
+通过公共 GitHub API 已实际读取运行、任务及 check-run 状态。日志下载接口返回 403 `Must have admin rights to Repository`；check-run 只暴露步骤失败退出码，没有异常详情。已请求用户提供失败步骤日志，不以时长推断根因。
+
+后续诊断改动只在脚本内部记录受控阶段、异常类型、命令退出码及白名单静态提示，并在 Actions 输出错误 annotation，便于公共 check-run 定位。不会输出命令参数、子进程原始输出、异常任意 payload 或配置内容。清理仍然执行；清理异常不能覆盖最初失败，也不会写成功报告。没有跳过冒烟或降低发布条件。
+
+诊断改动的 Ruff 及 `test_container_smoke.py`、`test_container_runtime.py`、`test_deployment_acceptance.py` 共 43 项通过，包含不泄露异常 payload、已知提示可见及清理失败保留主错误的反例。此结果不证明真实容器失败已修复；后续仍需以重跑的实际结果为准。
+
+GPT-6 Luna / high 独立只读复查并执行 `test_container_smoke.py`：10 passed，未发现异常 payload、凭据或命令日志泄露及绕过门禁。非阻塞限制：不符合预期的成功响应可能触发未包装的 KeyError / IndexError / AttributeError，此时仍失败关闭，但没有受控阶段 annotation。
+
+诊断改动全量 `make check` 再次通过（816 passed、1 条同源弃用 warning）；日志保存在被忽略的 `work/arm64-release-v1/diagnostic-make-check.log`。用户提供的原始失败步骤文本也只有 `container smoke failed: RuntimeError`，不能据此判断具体根因。
