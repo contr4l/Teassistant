@@ -43,7 +43,7 @@ run.json 给出实际覆盖、未解决数量、失败及最终 HTML/JSON 路径
 
     .venv/bin/python scripts/analyze_student_exam.py correct \
       --analysis work/exam-run/reports/REVISION/RENDERER/report.json \
-      --intake work/exam-intake/intake-with-regions.json \
+      --intake work/exam-run/intake-with-regions.json \
       --asset-root work/exam-intake \
       --curriculum data/curricula/junior-math-2022-draft-v2.json \
       --corrections work/exam-corrections.json \
@@ -60,3 +60,10 @@ run.json 给出实际覆盖、未解决数量、失败及最终 HTML/JSON 路径
 默认最近三次，允许 --exam-ids 显式选择。只有一两次也可汇总；日期未知提示顺序限制。按同一学生与原始材料身份去重，改考试 ID、重复导入或重跑模型不虚增次数。考点汇总为有证据的练习信号，不输出由单错/总分/排名推断的掌握率。原题排除仍需可靠同题身份桥接，不能把本地题号当题库 ID；生成练习还需要老师设置教学进度和选择考点。
 
 本批合同见 acceptance/exam-analysis-v1-contract.md，执行和独立检查分别见 acceptance/exam-analysis-v1-execution.md、acceptance/exam-analysis-v1-review.md。固定一名学生一次考试的验证不能代替真实三次考试、完整 MVP 或教师价值验收。
+
+
+## 网页分析显示 file not found
+
+增强卷面清单位于任务的 `run/intake-with-regions.json`，图片资源仍在同一任务的 `intake/`。任务发布前检查 CLI 元数据、身份和真实文件；API 兼容读取已知旧版错误指针对应的同任务清单，不跨任务搜索。原始资源清单用于绑定考试与学生。
+
+旧部署可使用 `scripts/repair_exam_intake_paths.py` 在 API 容器内诊断；默认只读，显式 `--apply` 才修正经验证的旧指针。向旧镜像复制脚本时，须同时把 `backend/app/exam_artifacts.py` 复制到脚本旁。诊断不调用模型，修复不覆盖分析或老师修正，无需重启。真实文件缺失、摘要不符或活动任务存在时不修复。详见 [修复合同与验收](acceptance/exam-artifact-paths-v1.md)。

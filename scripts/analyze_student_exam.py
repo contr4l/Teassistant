@@ -541,6 +541,11 @@ async def run(args):
         "reference_key_provided": bool(references),
         "analysis_revision": analysis.revision,
         "analysis_path": str(analysis_path),
+        # Keep the transformed manifest separate from its source images.  The
+        # manifest lives with this run; its page image paths still resolve
+        # against the original intake asset directory.
+        "intake_path": str((output / "intake-with-regions.json").resolve()),
+        "asset_root": str(root.resolve()),
         "renderer_sha256": renderer_sha256,
         "teacher_report_path": str(teacher_report_path) if teacher_report_path else None,
         "report": paths,

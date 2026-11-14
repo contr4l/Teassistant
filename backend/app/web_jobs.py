@@ -56,6 +56,63 @@ def _relative(settings, path):
     return str(Path(path).resolve().relative_to(settings.data_dir.resolve()))
 
 
+def _job_output_file(settings, job_directory, value, *, fallback=None):
+    """Resolve a CLI-produced path only when it is a file in this leased job."""
+    raw = fallback if value is None else value
+    if not isinstance(raw, str) or not raw or "\\" in raw:
+        raise JobInputError("analysis output path is invalid")
+    path = Path(raw)
+    if not path.is_absolute():
+        path = job_directory / path
+    try:
+        resolved = path.resolve(strict=True)
+        root = job_directory.resolve(strict=True)
+    except (OSError, RuntimeError):
+        raise JobInputError("analysis output is unavailable") from None
+    if not resolved.is_relative_to(root) or not resolved.is_file():
+        raise JobInputError("analysis output is outside this task")
+    return resolved
+
+
+def _run_intake(settings, job_directory, run, intake_dir, metadata, *, exam_id, student_id):
+    """Validate CLI run identity and resolve its transformed manifest/assets."""
+    from app.exam_artifacts import ArtifactUnavailable, read_exam_intake
+
+    intake_path = _job_output_file(
+        settings,
+        job_directory,
+        metadata.get("intake_path"),
+    )
+    expected_manifest = (run / "intake-with-regions.json").resolve(strict=True)
+    if intake_path != expected_manifest:
+        raise JobInputError("analysis intake manifest does not match this run")
+    # The original source images remain under the prepared intake directory.
+    reported_root = metadata.get("asset_root")
+    if not isinstance(reported_root, str) or not reported_root or "\\" in reported_root:
+        raise JobInputError("analysis asset root is invalid")
+    try:
+        expected_asset_root = intake_dir.resolve(strict=True)
+        reported_asset_root = Path(reported_root).resolve(strict=True)
+    except (OSError, RuntimeError, TypeError):
+        raise JobInputError("analysis asset root is unavailable") from None
+    if reported_asset_root != expected_asset_root:
+        raise JobInputError("analysis asset root does not match this task")
+
+    try:
+        intake_relative = _relative(settings, intake_path)
+        asset_relative = _relative(settings, expected_asset_root)
+    except (ValueError, OSError):
+        raise JobInputError("analysis intake is outside private storage") from None
+    candidate = {"intake_path": intake_relative, "asset_root": asset_relative}
+    try:
+        intake, effective_relative = read_exam_intake(
+            settings, candidate, exam_id=exam_id, student_id=student_id
+        )
+    except (ArtifactUnavailable, ValueError, OSError):
+        raise JobInputError("analysis intake is invalid or unavailable") from None
+    return intake, effective_relative, asset_relative
+
+
 def _curriculum(settings):
     return Curriculum.model_validate_json(settings.curriculum_path.read_bytes())
 
@@ -417,17 +474,43 @@ def _analysis(store, settings, job, directory):
     else:
         _subprocess_run(args, directory)
     result = json.loads((run / "run.json").read_text())
-    analysis = ExamAnalysis.model_validate_json(Path(result["analysis_path"]).read_bytes())
+    if not isinstance(result, dict):
+        raise JobInputError("analysis run manifest is invalid")
+    if result.get("schema_version") != "exam-run-v1" or result.get("provider") != provider:
+        raise JobInputError("analysis run identity is invalid")
+    source_intake_path = intake_dir / "intake.json"
+    if result.get("intake_sha256") != _sha(source_intake_path):
+        raise JobInputError("analysis run does not match its source intake")
+    if result.get("curriculum_sha256") != _sha(settings.curriculum_path):
+        raise JobInputError("analysis run does not match the curriculum")
+    intake, intake_relative, asset_relative = _run_intake(
+        settings,
+        directory,
+        run,
+        intake_dir,
+        result,
+        exam_id=job["resource_id"],
+        student_id=frozen["student_id"],
+    )
+    analysis_path = _job_output_file(settings, directory, result.get("analysis_path"))
+    result["analysis_path"] = str(analysis_path)
+    if result.get("teacher_report_path") is not None:
+        report_path = _job_output_file(settings, directory, result["teacher_report_path"])
+        result["teacher_report_path"] = str(report_path)
+    analysis = ExamAnalysis.model_validate_json(analysis_path.read_bytes())
+    curriculum = _curriculum(settings)
+    if (
+        analysis.exam_id != job["resource_id"]
+        or analysis.student_id != frozen["student_id"]
+        or analysis.curriculum_version != curriculum.version
+    ):
+        raise JobInputError("analysis identity does not match this exam")
     if data.get("manual_corrections"):
-        from app.exam_contracts import ExamIntake
-
         analysis = restore_manual_corrections(
             analysis,
             data["manual_corrections"],
-            intake=ExamIntake.model_validate_json(
-                (intake_dir / "intake-with-regions.json").read_bytes()
-            ),
-            curriculum=_curriculum(settings),
+            intake=intake,
+            curriculum=curriculum,
         )
         path = directory / "analysis-corrected.json"
         _write(path, analysis.model_dump(mode="json"))
@@ -457,8 +540,8 @@ def _analysis(store, settings, job, directory):
             "question_count": len(analysis.questions),
             "unresolved_question_count": result["unresolved_question_count"],
         },
-        intake_path=_relative(settings, intake_dir / "intake-with-regions.json"),
-        asset_root=_relative(settings, intake_dir),
+        intake_path=intake_relative,
+        asset_root=asset_relative,
         provider=provider,
         status=result["status"],
         prompt_revisions={k: v["revision"] for k, v in frozen["prompt_snapshot"].items()},
@@ -475,7 +558,7 @@ def _analysis(store, settings, job, directory):
 
 def _correction(store, settings, job, directory):
     from app.exam_analysis import apply_exam_corrections
-    from app.exam_contracts import ExamIntake
+    from app.exam_artifacts import ArtifactUnavailable, read_exam_intake
 
     frozen = job["input_data"]
     data = frozen["resource_data"]
@@ -484,15 +567,24 @@ def _correction(store, settings, job, directory):
     base = ExamAnalysis.model_validate_json(
         private_file(settings, data["analysis_path"]).read_bytes()
     )
+    if base.exam_id != job["resource_id"] or base.student_id != frozen["student_id"]:
+        raise JobInputError("analysis identity does not match this exam")
     current = store.get_record("exam", job["resource_id"], job["owner_id"])
     if current["data"].get("analysis_revision") != frozen["analysis_revision"]:
         raise JobInputError("已有更新的分析，请刷新后重试")
+    try:
+        intake, effective_intake_path = read_exam_intake(
+            settings,
+            data,
+            exam_id=job["resource_id"],
+            student_id=frozen["student_id"],
+        )
+    except (ArtifactUnavailable, ValueError, OSError):
+        raise JobInputError("analysis intake is invalid or unavailable") from None
     analysis = apply_exam_corrections(
         base,
         [ExamCorrection.model_validate(c) for c in frozen["corrections"]],
-        intake=ExamIntake.model_validate_json(
-            private_file(settings, data["intake_path"]).read_bytes()
-        ),
+        intake=intake,
         curriculum=_curriculum(settings),
     )
     path = directory / "analysis.json"
@@ -500,6 +592,7 @@ def _correction(store, settings, job, directory):
     updated = copy.deepcopy(data)
     updated.update(
         analysis_path=_relative(settings, path),
+        intake_path=effective_intake_path,
         analysis_revision=analysis.revision,
         teacher_report_path=None,
         teacher_report=None,

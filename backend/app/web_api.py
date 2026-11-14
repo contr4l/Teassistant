@@ -33,7 +33,8 @@ from pydantic import BaseModel, ConfigDict, Field, SecretStr, StringConstraints,
 
 from app.contracts import Curriculum, PracticeRequest, Quota
 from app.curriculum import CurriculumIndex
-from app.exam_contracts import ExamAnalysis, ExamCorrection, ExamIntake
+from app.exam_artifacts import ArtifactUnavailable, read_exam_intake
+from app.exam_contracts import ExamAnalysis, ExamCorrection
 from app.model_billing import (
     BillingConflict,
     BillingError,
@@ -800,10 +801,16 @@ def create_app(settings: WebSettings | None = None, store: Store | None = None) 
         if teacher_report is None and data.get("teacher_report_path"):
             teacher_report = _read_private_json(settings, data["teacher_report_path"])
         pages = []
-        if data.get("intake_path") and data.get("asset_root"):
-            intake = ExamIntake.model_validate_json(
-                _safe_path(Path(settings.data_dir), data["intake_path"]).read_bytes()
-            )
+        if data.get("intake_path") or data.get("asset_root"):
+            try:
+                intake, _effective_path = read_exam_intake(
+                    settings,
+                    data,
+                    exam_id=exam_id,
+                    student_id=data.get("student_id"),
+                )
+            except ArtifactUnavailable:
+                _http_error(404, "exam analysis not found")
             pages = [
                 {
                     "page_id": page.id,
@@ -824,15 +831,22 @@ def create_app(settings: WebSettings | None = None, store: Store | None = None) 
     ):
         exam = owner_record("exam", exam_id, identity["user"]["id"])
         data = exam["data"]
-        if not data.get("intake_path") or not data.get("asset_root"):
+        try:
+            intake, _effective_path = read_exam_intake(
+                settings,
+                data,
+                exam_id=exam_id,
+                student_id=data.get("student_id"),
+            )
+        except ArtifactUnavailable:
             _http_error(404, "analysis page not found")
-        intake = ExamIntake.model_validate_json(
-            _safe_path(Path(settings.data_dir), data["intake_path"]).read_bytes()
-        )
         page = next((item for item in intake.pages if item.id == page_id), None)
         if page is None:
             _http_error(404, "analysis page not found")
-        asset_root = _safe_directory(Path(settings.data_dir), data["asset_root"])
+        try:
+            asset_root = _safe_directory(Path(settings.data_dir), data["asset_root"])
+        except HTTPException:
+            _http_error(404, "analysis page not found")
         path = _safe_path(asset_root, page.image_path)
         if hashlib.sha256(path.read_bytes()).hexdigest() != page.image_sha256:
             _http_error(404, "analysis page not found")
@@ -851,6 +865,15 @@ def create_app(settings: WebSettings | None = None, store: Store | None = None) 
             _http_error(409, "analysis is not available yet")
         analysis = ExamAnalysis.model_validate(_read_private_json(settings, data["analysis_path"]))
         try:
+            intake, effective_intake_path = read_exam_intake(
+                settings,
+                data,
+                exam_id=exam_id,
+                student_id=data.get("student_id"),
+            )
+        except ArtifactUnavailable:
+            _http_error(404, "exam analysis not found")
+        try:
             from app.exam_analysis import apply_exam_corrections
 
             normalized = [ExamCorrection.model_validate(item) for item in payload.corrections]
@@ -858,14 +881,13 @@ def create_app(settings: WebSettings | None = None, store: Store | None = None) 
             apply_exam_corrections(
                 analysis,
                 normalized,
-                intake=ExamIntake.model_validate_json(
-                    _safe_path(Path(settings.data_dir), data["intake_path"]).read_bytes()
-                ),
+                intake=intake,
                 curriculum=curriculum,
             )
         except (ValidationError, ValueError, KeyError):
             _http_error(422, "correction does not match the current analysis")
         base = _job_input(store, settings, "correction", exam)
+        base["intake_path"] = effective_intake_path
         base["corrections"] = [item.model_dump(mode="json") for item in normalized]
         idempotency = _hash_json({"kind": "correction", "exam": exam_id, "input": base})
         job = store.enqueue_job(owner_id, "correction", exam_id, base, idempotency_key=idempotency)
