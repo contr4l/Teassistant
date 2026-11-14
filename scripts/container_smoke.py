@@ -96,8 +96,11 @@ def _validate_image(image: str) -> str:
     return image
 
 
-def _compose_text(image: str, share: Path, db_password: str) -> str:
-    image_yaml = json.dumps(image)
+def _compose_text(
+    image: str, share: Path, db_password: str, api_image: str | None = None
+) -> str:
+    worker_image_yaml = json.dumps(image)
+    api_image_yaml = json.dumps(image if api_image is None else api_image)
     # Keep the argument for callers; container-owned outputs stay in named volumes.
     password_yaml = json.dumps(db_password)
     app_env = """      TEASSISTANT_DATABASE_URL: postgresql+psycopg://smoke:{db}@postgres:5432/smoke
@@ -124,7 +127,7 @@ def _compose_text(image: str, share: Path, db_password: str) -> str:
     volumes:
       - smoke_db:/var/lib/postgresql/data
   init:
-    image: {image_yaml}
+    image: {api_image_yaml}
     healthcheck:
       disable: true
     environment:
@@ -136,7 +139,7 @@ def _compose_text(image: str, share: Path, db_password: str) -> str:
         condition: service_healthy
     command: [/app/.venv/bin/python, /app/scripts/manage_web.py, init]
   api:
-    image: {image_yaml}
+    image: {api_image_yaml}
     environment:
 {app_env}
     volumes:
@@ -146,7 +149,7 @@ def _compose_text(image: str, share: Path, db_password: str) -> str:
         condition: service_completed_successfully
     command: [/app/.venv/bin/uvicorn, app.web_api:create_app, --factory, --host, 0.0.0.0, --port, "8000"]
   worker:
-    image: {image_yaml}
+    image: {worker_image_yaml}
     healthcheck:
       test: [CMD, /app/.venv/bin/python, /app/scripts/container_healthcheck.py, --role, worker]
       interval: 30s
@@ -251,17 +254,20 @@ def _multipart_upload(
     opener: urllib.request.OpenerDirector,
     url: str,
     role: str,
-    png: bytes,
+    payload: bytes,
     csrf: str,
+    *,
+    filename: str,
+    content_type: str,
 ) -> int:
     boundary = "----TeassistantSmoke" + secrets.token_hex(12)
     body = (
         (
             f'--{boundary}\r\nContent-Disposition: form-data; name="role"\r\n\r\n{role}\r\n'
-            f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="synthetic.png"\r\n'
-            "Content-Type: image/png\r\n\r\n"
+            f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="{filename}"\r\n'
+            f"Content-Type: {content_type}\r\n\r\n"
         ).encode()
-        + png
+        + payload
         + f"\r\n--{boundary}--\r\n".encode()
     )
     request = urllib.request.Request(
@@ -296,6 +302,36 @@ def _png_1x1() -> bytes:
         + chunk(b"IDAT", zlib.compress(b"\x00\xff\xff\xff"))
         + chunk(b"IEND", b"")
     )
+
+
+def _pdf_single_page() -> bytes:
+    """Return a valid synthetic one-page PDF with no exam or student content."""
+    objects = (
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 1 1] "
+        b"/Resources << >> /Contents 4 0 R >>",
+        b"<< /Length 0 >>\nstream\n\nendstream",
+    )
+    output = bytearray(b"%PDF-1.4\n")
+    offsets = [0]
+    for number, body in enumerate(objects, start=1):
+        offsets.append(len(output))
+        output.extend(f"{number} 0 obj\n".encode())
+        output.extend(body)
+        output.extend(b"\nendobj\n")
+    xref_offset = len(output)
+    output.extend(f"xref\n0 {len(offsets)}\n".encode())
+    output.extend(b"0000000000 65535 f \n")
+    for offset in offsets[1:]:
+        output.extend(f"{offset:010d} 00000 n \n".encode())
+    output.extend(
+        (
+            f"trailer\n<< /Size {len(offsets)} /Root 1 0 R >>\n"
+            f"startxref\n{xref_offset}\n%%EOF\n"
+        ).encode()
+    )
+    return bytes(output)
 
 
 def _wait_api(opener: urllib.request.OpenerDirector, base_url: str, timeout: int) -> None:
@@ -376,9 +412,19 @@ def _api_smoke_client(timeout_seconds: int, username: str, password: str) -> dic
     if status != 201 or not isinstance(exam, dict):
         raise RuntimeError("synthetic exam creation failed")
     png = _png_1x1()
-    for role in ("paper", "response"):
+    pdf = _pdf_single_page()
+    for role, payload, filename, content_type in (
+        ("paper", png, "synthetic.png", "image/png"),
+        ("response", pdf, "synthetic.pdf", "application/pdf"),
+    ):
         uploaded = _multipart_upload(
-            opener, f"{base_url}/api/exams/{exam['id']}/assets", role, png, csrf
+            opener,
+            f"{base_url}/api/exams/{exam['id']}/assets",
+            role,
+            payload,
+            csrf,
+            filename=filename,
+            content_type=content_type,
         )
         if uploaded != 201:
             raise RuntimeError("synthetic exam asset upload failed")
@@ -600,6 +646,7 @@ def _api_smoke(compose: list[str], timeout: int) -> dict[str, Any]:
         "private_build_paths_absent": True,
         "api_healthcheck": "passed",
         "worker_healthcheck": "passed",
+        "uploaded_asset_types": ["PNG", "PDF"],
         **result,
     }
 
@@ -610,8 +657,11 @@ def run_smoke(
     docker_executable: str = "docker",
     timeout_seconds: int = 240,
     report_path: Path | None = None,
+    api_image: str | None = None,
 ) -> dict[str, Any]:
     image = _validate_image(image)
+    if api_image is not None:
+        api_image = _validate_image(api_image)
     if report_path is not None and (report_path.exists() or report_path.is_symlink()):
         raise ValueError("smoke report path must be new")
     docker = (
@@ -624,18 +674,29 @@ def run_smoke(
         [docker, "image", "inspect", "--format", "{{.Os}}/{{.Architecture}}", image],
         timeout=30,
     ).strip()
+    if api_image is not None:
+        api_platform = _at_stage(
+            "API image inspection", _run,
+            [docker, "image", "inspect", "--format", "{{.Os}}/{{.Architecture}}", api_image],
+            timeout=30,
+        ).strip()
+        if not platform or api_platform != platform:
+            raise ValueError("API and worker images must target the same platform")
     project = "ta-smoke-" + secrets.token_hex(5)
     with tempfile.TemporaryDirectory(prefix="teassistant-container-smoke-") as temp_text:
         temp = Path(temp_text)
         share = temp / "share"
         db_password = secrets.token_urlsafe(24)
         compose_file = temp / "compose.yaml"
-        compose_file.write_text(_compose_text(image, share, db_password), encoding="utf-8")
+        compose_file.write_text(
+            _compose_text(image, share, db_password, api_image=api_image), encoding="utf-8"
+        )
         compose_file.chmod(0o600)
         compose = [docker, "compose", "--project-name", project, "--file", str(compose_file)]
         result: dict[str, Any] = {
             "schema_version": "container-smoke-v1",
             "image": image,
+            "api_image": api_image or image,
             "platform": platform,
             "model_credentials": "none",
         }
@@ -649,7 +710,7 @@ def run_smoke(
             chromium = _at_stage(
                 "Chromium render", _run,
                 compose + [
-                    "run", "--rm", "-T", "--no-deps", "api", "/app/.venv/bin/python",
+                    "run", "--rm", "-T", "--no-deps", "worker", "/app/.venv/bin/python",
                     "/app/scripts/container_smoke_fixture.py", "chromium",
                     "--output", "/app/work/container-smoke/chromium-render",
                 ],
@@ -663,7 +724,7 @@ def run_smoke(
                     "--rm",
                     "-T",
                     "--no-deps",
-                    "api",
+                    "worker",
                     "/app/.venv/bin/python",
                     "/app/scripts/container_smoke_fixture.py",
                     "word",
@@ -680,7 +741,7 @@ def run_smoke(
                     "--rm",
                     "-T",
                     "--no-deps",
-                    "api",
+                    "worker",
                     "/app/.venv/bin/python",
                     "/app/scripts/container_smoke_fixture.py",
                     "latex",
@@ -712,6 +773,10 @@ def run_smoke(
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--image", required=True, help="already-built local Docker image")
+    parser.add_argument(
+        "--api-image",
+        help="optional already-built lean API/init image; worker keeps using --image",
+    )
     parser.add_argument("--docker-executable", default="docker")
     parser.add_argument("--timeout-seconds", type=int, default=240)
     parser.add_argument("--report", type=Path)
@@ -724,6 +789,7 @@ def main(argv: list[str] | None = None) -> int:
             docker_executable=args.docker_executable,
             timeout_seconds=args.timeout_seconds,
             report_path=args.report,
+            api_image=args.api_image,
         )
     except SmokeStageError as exc:
         print(f"container smoke failed: {exc.summary}", file=sys.stderr)

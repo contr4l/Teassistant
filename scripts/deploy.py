@@ -63,6 +63,14 @@ def read_config(env_file: Path) -> dict[str, str]:
 
 
 def validate_config(values: dict[str, str]) -> list[str]:
+    api_target = values.get("TEASSISTANT_API_TARGET", "runtime") or "runtime"
+    if api_target not in {"api", "runtime"}:
+        raise DeploymentError("API build target must be api or runtime")
+    if api_target == "api" and (
+        not values.get("TEASSISTANT_API_IMAGE")
+        or values["TEASSISTANT_API_IMAGE"] == (values.get("TEASSISTANT_IMAGE") or "teassistant:local")
+    ):
+        raise DeploymentError("Lightweight API and worker require distinct image references")
     password = values.get("TEASSISTANT_DB_PASSWORD", "")
     if not re.fullmatch(r"[A-Za-z0-9._~-]{20,128}", password):
         raise DeploymentError("Database password must be 20-128 URL-safe characters; use init")
@@ -191,7 +199,7 @@ def bootstrap(env_file: Path, accounts_file: Path, *, build: bool) -> None:
         initialize(env_file)
     check(env_file)
     if build:
-        subprocess.run(compose_command(env_file, "build", "api"), check=True)
+        subprocess.run(compose_command(env_file, "build", "worker", "api"), check=True)
     subprocess.run(
         compose_command(env_file, "up", "-d", "--no-build", "--wait", "--wait-timeout", "180"),
         check=True,
@@ -244,8 +252,8 @@ def main(argv: list[str] | None = None) -> int:
             check(env_file)
         commands = {
             "check": None,
-            "build": ["build", "api"],
-            "pull": ["pull", "postgres", "api"],
+            "build": ["build", "worker", "api"],
+            "pull": ["pull", "postgres", "worker", "api"],
             "status": ["ps", "--all"],
             "stop": ["stop"],
             "up": ["up", "-d", "--no-build", "--wait", "--wait-timeout", "180"],
@@ -265,7 +273,7 @@ def main(argv: list[str] | None = None) -> int:
         else:
             command = commands[args.command]
         if args.command == "up" and args.build:
-            subprocess.run(compose_command(env_file, "build", "api"), check=True)
+            subprocess.run(compose_command(env_file, "build", "worker", "api"), check=True)
         if command:
             subprocess.run(compose_command(env_file, *command), check=True)
         return 0

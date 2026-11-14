@@ -4,6 +4,7 @@ x-application: &application
   image: ${TEASSISTANT_IMAGE:-teassistant:local}
   build:
     context: .
+    target: runtime
   restart: unless-stopped
   environment:
     TEASSISTANT_DATABASE_URL: postgresql+psycopg://teassistant:${TEASSISTANT_DB_PASSWORD:?Run python3 scripts/deploy.py init first}@postgres:5432/teassistant
@@ -54,6 +55,10 @@ services:
 
   init:
     <<: *application
+    image: ${TEASSISTANT_API_IMAGE:-${TEASSISTANT_IMAGE:-teassistant:local}}
+    build:
+      context: .
+      target: ${TEASSISTANT_API_TARGET:-runtime}
     restart: "no"
     command: [/app/.venv/bin/python, /app/scripts/manage_web.py, init]
     healthcheck:
@@ -64,6 +69,10 @@ services:
 
   api:
     <<: *application
+    image: ${TEASSISTANT_API_IMAGE:-${TEASSISTANT_IMAGE:-teassistant:local}}
+    build:
+      context: .
+      target: ${TEASSISTANT_API_TARGET:-runtime}
     ports:
       - "${TEASSISTANT_BIND:-127.0.0.1}:${TEASSISTANT_PORT:-8000}:8000"
     healthcheck:

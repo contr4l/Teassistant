@@ -32,6 +32,21 @@ export = [
     "pypandoc-binary>=1.17,<2",
     "playwright>=1.50,<2",
 ]
+api = [
+    "pydantic>=2.10,<3",
+    "httpx>=0.28,<1",
+    "networkx>=3.4,<4",
+    "python-docx>=1.1,<2",
+    "Pillow>=11,<13",
+    "lxml>=5,<7",
+    "olefile>=0.47,<1",
+    "pypdfium2==5.14.0",
+    "fastapi>=0.115,<1",
+    "uvicorn>=0.34,<1",
+    "sqlalchemy>=2.0,<3",
+    "psycopg[binary]>=3.2,<4",
+    "python-multipart>=0.0.20,<1",
+]
 
 [tool.pytest.ini_options]
 pythonpath = ["backend"]

@@ -1,6 +1,18 @@
 # Docker 单服务器部署
 
-本方案把前端、Python 运行环境、中文字体、LibreOffice 和 XeLaTeX 放入同一镜像。数据库、上传文件、生成文件和题库放在镜像外，更新镜像不删除它们。默认有 API、独立数据库任务 Worker、PostgreSQL 三个常驻服务；init 一次性初始化表与默认提示词。首次建表完成后才启动 API 和 Worker，管理员账号需显式创建。
+本方案使用轻量 API 镜像和完整 Worker 镜像：前端、账号、上传与查询在 API 中；中文字体、LibreOffice、Chromium、Pandoc 和 XeLaTeX 留在 Worker 中。两者使用同一源码版本、数据库任务队列和文件卷，不新增外部转换服务。数据库、上传文件、生成文件和题库放在镜像外，更新镜像不删除它们。默认有 API、独立数据库任务 Worker、PostgreSQL 三个常驻服务；init 一次性初始化表与默认提示词。首次建表完成后才启动 API 和 Worker，管理员账号需显式创建。
+
+## 镜像体积与更新成本
+
+完整 Worker 镜像保留 LibreOffice、Chromium、Pandoc 和中文 XeLaTeX，以支持原生 Word 公式、题库来源渲染及 PDF 排版。API 使用 Python Alpine 和独立锁定的依赖组，保留 PDFium 以支持 PDF 上传校验，不含浏览器及导出工具。Node 前端构建环境、Git、uv 和依赖下载缓存留在构建阶段；生产镜像排除后端测试代码，依赖复制前清理 Python 字节码，安装系统包的同一层清理帮助页、部分离线文档和 APT 缓存，保留版权说明及运行资源。
+
+每个平台的 CI 构建完成并通过容器冒烟后，在 Actions Summary 记录未压缩镜像大小及主要目录占用。也可在镜像所在机器运行 `python3 scripts/image_size_report.py --image teassistant:local`。该数值不等于仓库压缩下载量、内存占用或共享层条件下新增磁盘量；BuildKit 的 GitHub Actions 缓存还包含中间构建阶段，不能用缓存导出量代表部署镜像大小。
+
+API 镜像以 Docker 累计未压缩 `.Size ≤200,000,000 bytes` 为硬门槛，CI 超限停止发布。这不是整套部署的磁盘或内存限额：完整 Worker、PostgreSQL、缓存、题库与数据卷另外占用空间。比较瘦身前后应固定架构和基础镜像版本，并分别验证 Word、LaTeX PDF、中文和 Chromium；本批证据见 [轻量 API 验收记录](acceptance/lean-api-v1.md)。
+
+新生成配置默认 `TEASSISTANT_IMAGE=teassistant:local`、`TEASSISTANT_API_IMAGE=teassistant:api-local`、`TEASSISTANT_API_TARGET=api`。`deploy.py build` 和 `bootstrap --build` 都构建 API 与 Worker；`pull` 也拉取两者及数据库。旧配置不含新键时，API/init 继续使用原完整镜像和 runtime 构建目标，保留兼容性；要启用拆分需补齐新键。轻量 API 与 Worker 不可设置成同一个镜像引用，否则不同 target 会覆盖彼此。
+
+自行构建时，`docker build --target api -t teassistant:api-local .` 生成主镜像，`docker build --target runtime -t teassistant:local .` 生成完整 Worker；默认不写 target 仍构建完整镜像。API 镜像不能代替完整 Worker 来执行真实题库加工或导出。
 
 ## 首次启动
 
@@ -19,6 +31,8 @@ python3 scripts/deploy.py init
 | 配置 | 用途 |
 | --- | --- |
 | `TEASSISTANT_IMAGE` | 首次本地构建可用 `teassistant:local`；发布后改为 GHCR 版本标签或不可变 digest |
+| `TEASSISTANT_API_IMAGE` | 轻量 API/init 镜像；发布时使用同一次运行提供的 `api-完整SHA` 标签或对应 digest，不混用版本 |
+| `TEASSISTANT_API_TARGET` | 新配置为 `api`；旧配置缺省为 `runtime`，控制本地构建目标，不改变已发布镜像内容 |
 | `TEASSISTANT_DB_PASSWORD` | init 生成的 64 位十六进制随机值；修改为自定义值时限 20–128 位 URL 安全字符，避免 DSN 编码问题 |
 | `DEEPSEEK_API_KEY` / `DEEPSEEK_MODEL` | 密钥可暂空，启动后在管理员网页保存；环境变量作为后备。本批网页模型限定 `deepseek-flash` 与官方地址，镜像构建不需要密钥 |
 | `TEASSISTANT_BIND` / `TEASSISTANT_PORT` | 默认 `127.0.0.1:8000`；需要受控内网访问时可显式设置 `0.0.0.0` |
@@ -94,6 +108,8 @@ check 验证配置、必需文件和 Compose 语法，不代替题库全部内�
 
 推送代码后先在仓库 Actions 查看结果，再从该次发布记录选择镜像标签或 digest。私有 GHCR 包需要服务器以具有 `read:packages` 的账户凭据登录；使用交互 `docker login ghcr.io`，不要把令牌写进本项目配置、shell 命令参数或仓库。
 
+发布摘要会提供配套的 `TEASSISTANT_IMAGE=ghcr.io/contr4l/teassistant:完整SHA` 与 `TEASSISTANT_API_IMAGE=ghcr.io/contr4l/teassistant:api-完整SHA`，一起更新原 `.env.deploy`；本地构建启用拆分时另设 `TEASSISTANT_API_TARGET=api`。完整镜像既有 SHA/latest/vN.N.N 标签保持，轻量 API 对应 api-SHA/api-latest/api-vN.N.N。两类镜像都经过各自平台检查和混合容器冒烟后发布。
+
 仓库需允许工作流请求`packages: write`，组织策略可能另外限制发布。版本标签须为`v主版本.次版本.修订版本`，并在Rulesets保护`v*`；未保护标签只检查，不发布。默认分支push/手动运行生成latest与完整提交SHA标签，每次成功发布摘要给出可复制的`TEASSISTANT_IMAGE=...:提交SHA`。PR及非默认分支手动运行不发布，PR构建任务无包写权限。镜像默认可见性不由本流程更改，首次GHCR包通常为private；公开包可匿名拉取，私有包由用户使用具有read:packages权限的PAT登录，不能用GitHub账户密码代替令牌。
 
 已发布镜像的部署：
@@ -104,9 +120,9 @@ python3 scripts/deploy.py pull
 python3 scripts/deploy.py up
 ```
 
-更新采用同样两条命令，`up`明确带`--no-build`，镜像拉取失败不会悄悄在板上重新编译。保留原Compose项目名、端口、数据库密码、种子挂载及两个数据卷；API和Worker一起使用同一镜像。首次下载包含TeX/字体/Chromium的大镜像层，后续复用已有层，只拉取变化内容，耗时仍取决于网络和缓存。
+更新采用同样两条命令，`up`明确带`--no-build`，镜像拉取失败不会悄悄在板上重新编译。保留原Compose项目名、端口、数据库密码、种子挂载及两个数据卷；API和Worker使用同一次发布的配套镜像。首次下载包含TeX/字体/Chromium的大镜像层，后续复用已有层，只拉取变化内容，耗时仍取决于网络和缓存。
 
-ROCK 5B无需重新上传整套源码或重新初始化账号；原压缩包部署目录可以继续使用。当前Compose和deploy.py已支持此方式；未来若部署协议/Compose有变化，仍需同步小体积部署文件。升级前按下节备份，成功后刷新网页确认版本和业务。
+首次从旧单镜像部署切换到轻量 API 时，先在原部署目录同步本次 `compose.yaml` 与 `scripts/deploy.py`，再参考 `.env.deploy.example` 将新键补入原 `.env.deploy`，然后执行 `pull`、`up`。保留已有配置文件、项目名、数据库密码、题库挂载及数据卷，不用示例配置覆盖原文件，也无需重新初始化账号。后续镜像升级继续使用配套的两个版本引用；升级前按下节备份，成功后刷新网页确认版本和业务。
 
 建议固定不可变digest；完整提交SHA标签比latest易追踪，但同一提交重新构建仍可能覆盖其SHA标签（上游基础镜像可更新）。可在板子执行`docker image inspect 镜像引用 --format '{{json .RepoDigests}}'`取得digest，再把准确引用写入`.env.deploy`。GHCR不提供多个标签的跨标签事务，网络中断可能留下SHA已发布但latest未更新；只按最终成功运行的摘要部署，不把失败运行的中间推送当完整发布。
 

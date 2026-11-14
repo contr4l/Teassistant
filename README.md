@@ -31,6 +31,8 @@
 
 ## Docker 单机部署
 
+主应用与工具 Worker 使用配套镜像：API 的未压缩大小门槛为 200 MB，Worker 保留 Word/PDF、中文 LaTeX 与题库浏览器渲染能力。发布摘要分别提供 `TEASSISTANT_API_IMAGE` 与 `TEASSISTANT_IMAGE`，升级时一起更新；整套部署的空间不受 200 MB 限制。
+
 ROCK 5B（ARM64）环境确认与预设账号见[板上部署指南](docs/rock5b-deployment.md)。日常升级优先从成功的GitHub Actions运行取得GHCR多架构镜像，在原`.env.deploy`设置镜像引用后运行`python3 scripts/deploy.py pull`及`python3 scripts/deploy.py up`，板子只下载并运行ARM64镜像。首次也可显式执行`python3 scripts/deploy.py bootstrap --build --accounts-file .accounts.deploy.json`本地构建。流水线配置完成、云端构建成功与板上健康分别验证，不互相替代。
 
 服务器准备 Docker Engine、Compose v2 和 Python 3（仅标准库），不需要在宿主机安装 Node、uv、中文字体或 LaTeX。部署配置与开发配置分开：

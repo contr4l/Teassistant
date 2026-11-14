@@ -104,18 +104,55 @@ jobs:
           cache-to: type=gha,mode=max,scope=teassistant-${{ matrix.arch }}
           provenance: false
           sbom: false
+      - name: Build native lean API image with independent cache
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
+        with:
+          context: .
+          file: ./Dockerfile
+          target: api
+          platforms: ${{ matrix.platform }}
+          load: true
+          tags: teassistant-api-ci:${{ github.sha }}-${{ matrix.arch }}
+          build-args: |
+            VCS_REF=${{ github.sha }}
+          cache-from: type=gha,scope=api-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=api-${{ matrix.arch }}
+          provenance: false
+          sbom: false
       - name: Verify loaded image architecture
         env:
           IMAGE_TAG: teassistant-ci:${{ github.sha }}-${{ matrix.arch }}
+          API_IMAGE_TAG: teassistant-api-ci:${{ github.sha }}-${{ matrix.arch }}
           EXPECTED_ARCH: ${{ matrix.arch }}
         run: |
           actual_arch="$(docker image inspect --format '{{.Architecture}}' "$IMAGE_TAG")"
           [[ "$actual_arch" == "$EXPECTED_ARCH" ]]
+          api_arch="$(docker image inspect --format '{{.Architecture}}' "$API_IMAGE_TAG")"
+          [[ "$api_arch" == "$EXPECTED_ARCH" ]]
       - name: Run isolated synthetic container smoke
         env:
           IMAGE_TAG: teassistant-ci:${{ github.sha }}-${{ matrix.arch }}
+          API_IMAGE_TAG: teassistant-api-ci:${{ github.sha }}-${{ matrix.arch }}
           EXPECTED_ARCH: ${{ matrix.arch }}
-        run: python3 scripts/container_smoke.py --image "$IMAGE_TAG" --report "$RUNNER_TEMP/container-smoke-${EXPECTED_ARCH}.json"
+        run: python3 scripts/container_smoke.py --image "$IMAGE_TAG" --api-image "$API_IMAGE_TAG" --report "$RUNNER_TEMP/container-smoke-${EXPECTED_ARCH}.json"
+      - name: Enforce lean API image size limit
+        env:
+          API_IMAGE_TAG: teassistant-api-ci:${{ github.sha }}-${{ matrix.arch }}
+        run: python3 scripts/image_size_report.py --image "$API_IMAGE_TAG" --max-bytes 200000000 >> "$GITHUB_STEP_SUMMARY"
+      - name: Report runtime image size
+        env:
+          IMAGE_TAG: teassistant-ci:${{ github.sha }}-${{ matrix.arch }}
+        run: |
+          python3 scripts/image_size_report.py --image "$IMAGE_TAG" >> "$GITHUB_STEP_SUMMARY"
+          echo 'Major runtime directories (du; not a total image size):' >> "$GITHUB_STEP_SUMMARY"
+          echo '```text' >> "$GITHUB_STEP_SUMMARY"
+          docker run --rm --network none --read-only --entrypoint /bin/sh "$IMAGE_TAG" -ec '
+            for directory in /usr/lib/libreoffice /usr/lib/chromium /usr/share/texlive \
+              /usr/share/texmf /usr/share/fonts /app/.venv /app/backend /app/frontend; do
+              if [ -d "$directory" ]; then du -sh "$directory"; fi
+            done' \
+            >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
 
   publish-platform:
     name: Build, smoke and stage ${{ matrix.platform }} image
@@ -158,18 +195,41 @@ jobs:
           cache-to: type=gha,mode=max,scope=teassistant-${{ matrix.arch }}
           provenance: false
           sbom: false
+      - name: Build trusted native lean API image with independent cache
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
+        with:
+          context: .
+          file: ./Dockerfile
+          target: api
+          platforms: ${{ matrix.platform }}
+          load: true
+          tags: teassistant-api-release:${{ github.sha }}-${{ matrix.arch }}
+          build-args: |
+            VCS_REF=${{ github.sha }}
+          cache-from: type=gha,scope=api-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=api-${{ matrix.arch }}
+          provenance: false
+          sbom: false
       - name: Verify loaded image architecture
         env:
           IMAGE_TAG: teassistant-release:${{ github.sha }}-${{ matrix.arch }}
+          API_IMAGE_TAG: teassistant-api-release:${{ github.sha }}-${{ matrix.arch }}
           EXPECTED_ARCH: ${{ matrix.arch }}
         run: |
           actual_arch="$(docker image inspect --format '{{.Architecture}}' "$IMAGE_TAG")"
           [[ "$actual_arch" == "$EXPECTED_ARCH" ]]
+          api_arch="$(docker image inspect --format '{{.Architecture}}' "$API_IMAGE_TAG")"
+          [[ "$api_arch" == "$EXPECTED_ARCH" ]]
       - name: Repeat isolated synthetic smoke before registry login
         env:
           IMAGE_TAG: teassistant-release:${{ github.sha }}-${{ matrix.arch }}
+          API_IMAGE_TAG: teassistant-api-release:${{ github.sha }}-${{ matrix.arch }}
           EXPECTED_ARCH: ${{ matrix.arch }}
-        run: python3 scripts/container_smoke.py --image "$IMAGE_TAG" --report "$RUNNER_TEMP/container-smoke-publish-${EXPECTED_ARCH}.json"
+        run: python3 scripts/container_smoke.py --image "$IMAGE_TAG" --api-image "$API_IMAGE_TAG" --report "$RUNNER_TEMP/container-smoke-publish-${EXPECTED_ARCH}.json"
+      - name: Enforce trusted lean API image size before registry login
+        env:
+          API_IMAGE_TAG: teassistant-api-release:${{ github.sha }}-${{ matrix.arch }}
+        run: python3 scripts/image_size_report.py --image "$API_IMAGE_TAG" --max-bytes 200000000 >> "$GITHUB_STEP_SUMMARY"
       - name: Validate trusted release reference and prepare unique staging tag
         id: tags
         env:
@@ -177,14 +237,27 @@ jobs:
           ARCH: ${{ matrix.arch }}
           RUN_ID: ${{ github.run_id }}
           RUN_ATTEMPT: ${{ github.run_attempt }}
+          EVENT_NAME: ${{ github.event_name }}
+          SOURCE_REF: ${{ github.ref }}
+          SOURCE_REF_PROTECTED: ${{ github.ref_protected }}
         shell: bash
         run: |
           image="$(printf '%s' "$GHCR_IMAGE" | tr '[:upper:]' '[:lower:]')"
           [[ "$image" =~ ^ghcr\.io/[a-z0-9_.-]+/[a-z0-9_.-]+$ ]]
           [[ "$ARCH" == amd64 || "$ARCH" == arm64 ]]
           [[ "$RUN_ID" =~ ^[0-9]+$ && "$RUN_ATTEMPT" =~ ^[0-9]+$ ]]
+          if [[ "$EVENT_NAME" == push && "$SOURCE_REF" == refs/tags/* ]]; then
+            [[ "$SOURCE_REF_PROTECTED" == true ]]
+            release_tag="${SOURCE_REF#refs/tags/}"
+            [[ "$release_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          elif [[ "$EVENT_NAME" == push || "$EVENT_NAME" == workflow_dispatch ]]; then
+            release_tag=latest
+          else
+            exit 2
+          fi
           echo "image=$image" >> "$GITHUB_OUTPUT"
           echo "stage_tag=staging-${RUN_ID}-${RUN_ATTEMPT}-${ARCH}" >> "$GITHUB_OUTPUT"
+          echo "api_stage_tag=api-staging-${RUN_ID}-${RUN_ATTEMPT}-${ARCH}" >> "$GITHUB_OUTPUT"
       - name: Log in to GHCR after checks and smoke passed
         env:
           GHCR_USER: ${{ github.actor }}
@@ -195,6 +268,14 @@ jobs:
           LOCAL_IMAGE: teassistant-release:${{ github.sha }}-${{ matrix.arch }}
           GHCR_IMAGE: ${{ steps.tags.outputs.image }}
           STAGE_TAG: ${{ steps.tags.outputs.stage_tag }}
+        run: |
+          docker tag "$LOCAL_IMAGE" "$GHCR_IMAGE:$STAGE_TAG"
+          docker push "$GHCR_IMAGE:$STAGE_TAG"
+      - name: Push smoke-tested native API image to unique staging tag
+        env:
+          LOCAL_IMAGE: teassistant-api-release:${{ github.sha }}-${{ matrix.arch }}
+          GHCR_IMAGE: ${{ steps.tags.outputs.image }}
+          STAGE_TAG: ${{ steps.tags.outputs.api_stage_tag }}
         run: |
           docker tag "$LOCAL_IMAGE" "$GHCR_IMAGE:$STAGE_TAG"
           docker push "$GHCR_IMAGE:$STAGE_TAG"
@@ -246,34 +327,51 @@ jobs:
           echo "release_tag=$release_tag" >> "$GITHUB_OUTPUT"
           echo "stage_amd64=staging-${RUN_ID}-${RUN_ATTEMPT}-amd64" >> "$GITHUB_OUTPUT"
           echo "stage_arm64=staging-${RUN_ID}-${RUN_ATTEMPT}-arm64" >> "$GITHUB_OUTPUT"
+          echo "api_stage_amd64=api-staging-${RUN_ID}-${RUN_ATTEMPT}-amd64" >> "$GITHUB_OUTPUT"
+          echo "api_stage_arm64=api-staging-${RUN_ID}-${RUN_ATTEMPT}-arm64" >> "$GITHUB_OUTPUT"
       - name: Log in to GHCR
         env:
           GHCR_USER: ${{ github.actor }}
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GHCR_USER" --password-stdin
-      - name: Create and verify both local release manifests
+      - name: Create and verify full and API release manifests before any final push
         env:
           GHCR_IMAGE: ${{ steps.refs.outputs.image }}
           STAGE_AMD64: ${{ steps.refs.outputs.stage_amd64 }}
           STAGE_ARM64: ${{ steps.refs.outputs.stage_arm64 }}
+          API_STAGE_AMD64: ${{ steps.refs.outputs.api_stage_amd64 }}
+          API_STAGE_ARM64: ${{ steps.refs.outputs.api_stage_arm64 }}
           FINAL_SHA: ${{ steps.refs.outputs.sha }}
           RELEASE_TAG: ${{ steps.refs.outputs.release_tag }}
-          SHA_MANIFEST_FILE: ${{ runner.temp }}/teassistant-sha-manifest.json
-          RELEASE_MANIFEST_FILE: ${{ runner.temp }}/teassistant-release-manifest.json
-          SHA_VERIFIED_FILE: ${{ runner.temp }}/teassistant-sha-platforms.json
-          RELEASE_VERIFIED_FILE: ${{ runner.temp }}/teassistant-release-platforms.json
         shell: bash
         run: |
-          docker manifest create "$GHCR_IMAGE:$FINAL_SHA" \
-            "$GHCR_IMAGE:$STAGE_AMD64" "$GHCR_IMAGE:$STAGE_ARM64"
-          docker manifest create "$GHCR_IMAGE:$RELEASE_TAG" \
-            "$GHCR_IMAGE:$STAGE_AMD64" "$GHCR_IMAGE:$STAGE_ARM64"
-          docker manifest inspect "$GHCR_IMAGE:$FINAL_SHA" > "$SHA_MANIFEST_FILE"
-          python3 scripts/verify_image_manifest.py --input "$SHA_MANIFEST_FILE" > "$SHA_VERIFIED_FILE"
-          docker manifest inspect "$GHCR_IMAGE:$RELEASE_TAG" > "$RELEASE_MANIFEST_FILE"
-          python3 scripts/verify_image_manifest.py --input "$RELEASE_MANIFEST_FILE" > "$RELEASE_VERIFIED_FILE"
-          cmp "$SHA_VERIFIED_FILE" "$RELEASE_VERIFIED_FILE"
-      - name: Push the preverified SHA and release manifests
+          for flavor in full api; do
+            if [[ "$flavor" == full ]]; then
+              sha_tag="$FINAL_SHA"
+              release_tag="$RELEASE_TAG"
+              stage_amd64="$STAGE_AMD64"
+              stage_arm64="$STAGE_ARM64"
+            else
+              sha_tag="api-$FINAL_SHA"
+              release_tag="api-$RELEASE_TAG"
+              stage_amd64="$API_STAGE_AMD64"
+              stage_arm64="$API_STAGE_ARM64"
+            fi
+            sha_manifest="$RUNNER_TEMP/teassistant-$flavor-sha-manifest.json"
+            release_manifest="$RUNNER_TEMP/teassistant-$flavor-release-manifest.json"
+            sha_verified="$RUNNER_TEMP/teassistant-$flavor-sha-platforms.json"
+            release_verified="$RUNNER_TEMP/teassistant-$flavor-release-platforms.json"
+            docker manifest create "$GHCR_IMAGE:$sha_tag" \
+              "$GHCR_IMAGE:$stage_amd64" "$GHCR_IMAGE:$stage_arm64"
+            docker manifest create "$GHCR_IMAGE:$release_tag" \
+              "$GHCR_IMAGE:$stage_amd64" "$GHCR_IMAGE:$stage_arm64"
+            docker manifest inspect "$GHCR_IMAGE:$sha_tag" > "$sha_manifest"
+            python3 scripts/verify_image_manifest.py --input "$sha_manifest" > "$sha_verified"
+            docker manifest inspect "$GHCR_IMAGE:$release_tag" > "$release_manifest"
+            python3 scripts/verify_image_manifest.py --input "$release_manifest" > "$release_verified"
+            cmp "$sha_verified" "$release_verified"
+          done
+      - name: Push all preverified SHA and release manifests
         env:
           GHCR_IMAGE: ${{ steps.refs.outputs.image }}
           FINAL_SHA: ${{ steps.refs.outputs.sha }}
@@ -282,29 +380,43 @@ jobs:
         run: |
           docker manifest push --purge "$GHCR_IMAGE:$FINAL_SHA"
           docker manifest push --purge "$GHCR_IMAGE:$RELEASE_TAG"
-      - name: Verify remote published manifests
+          docker manifest push --purge "$GHCR_IMAGE:api-$FINAL_SHA"
+          docker manifest push --purge "$GHCR_IMAGE:api-$RELEASE_TAG"
+      - name: Verify both remote published manifests
         env:
           GHCR_IMAGE: ${{ steps.refs.outputs.image }}
           FINAL_SHA: ${{ steps.refs.outputs.sha }}
           RELEASE_TAG: ${{ steps.refs.outputs.release_tag }}
-          SHA_MANIFEST_FILE: ${{ runner.temp }}/teassistant-remote-sha-manifest.json
-          RELEASE_MANIFEST_FILE: ${{ runner.temp }}/teassistant-remote-release-manifest.json
-          SHA_VERIFIED_FILE: ${{ runner.temp }}/teassistant-remote-sha-platforms.json
-          RELEASE_VERIFIED_FILE: ${{ runner.temp }}/teassistant-remote-release-platforms.json
         shell: bash
         run: |
-          docker manifest inspect "$GHCR_IMAGE:$FINAL_SHA" > "$SHA_MANIFEST_FILE"
-          python3 scripts/verify_image_manifest.py --input "$SHA_MANIFEST_FILE" > "$SHA_VERIFIED_FILE"
-          docker manifest inspect "$GHCR_IMAGE:$RELEASE_TAG" > "$RELEASE_MANIFEST_FILE"
-          python3 scripts/verify_image_manifest.py --input "$RELEASE_MANIFEST_FILE" > "$RELEASE_VERIFIED_FILE"
-          cmp "$SHA_VERIFIED_FILE" "$RELEASE_VERIFIED_FILE"
-      - name: Write deployment reference
+          for flavor in full api; do
+            if [[ "$flavor" == full ]]; then
+              sha_tag="$FINAL_SHA"
+              release_tag="$RELEASE_TAG"
+            else
+              sha_tag="api-$FINAL_SHA"
+              release_tag="api-$RELEASE_TAG"
+            fi
+            sha_manifest="$RUNNER_TEMP/teassistant-remote-$flavor-sha-manifest.json"
+            release_manifest="$RUNNER_TEMP/teassistant-remote-$flavor-release-manifest.json"
+            sha_verified="$RUNNER_TEMP/teassistant-remote-$flavor-sha-platforms.json"
+            release_verified="$RUNNER_TEMP/teassistant-remote-$flavor-release-platforms.json"
+            docker manifest inspect "$GHCR_IMAGE:$sha_tag" > "$sha_manifest"
+            python3 scripts/verify_image_manifest.py --input "$sha_manifest" > "$sha_verified"
+            docker manifest inspect "$GHCR_IMAGE:$release_tag" > "$release_manifest"
+            python3 scripts/verify_image_manifest.py --input "$release_manifest" > "$release_verified"
+            cmp "$sha_verified" "$release_verified"
+            cmp "$sha_verified" "$RUNNER_TEMP/teassistant-$flavor-sha-platforms.json"
+          done
+      - name: Write deployment references
         env:
           GHCR_IMAGE: ${{ steps.refs.outputs.image }}
           FINAL_SHA: ${{ steps.refs.outputs.sha }}
         run: |
           echo '## Multi-architecture deployment image' >> "$GITHUB_STEP_SUMMARY"
           echo "TEASSISTANT_IMAGE=$GHCR_IMAGE:$FINAL_SHA" >> "$GITHUB_STEP_SUMMARY"
+          echo "TEASSISTANT_API_IMAGE=$GHCR_IMAGE:api-$FINAL_SHA" >> "$GITHUB_STEP_SUMMARY"
+          echo "TEASSISTANT_API_TARGET=api" >> "$GITHUB_STEP_SUMMARY"
           echo 'Verified platforms: linux/amd64 and linux/arm64.' >> "$GITHUB_STEP_SUMMARY"
           echo 'A later rerun of the same commit may update its full-SHA tag; use an image digest when immutable pinning is required.' >> "$GITHUB_STEP_SUMMARY"
           echo 'On the board, set TEASSISTANT_IMAGE to this reference, then run deploy.py pull and deploy.py up.' >> "$GITHUB_STEP_SUMMARY"

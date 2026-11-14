@@ -8,7 +8,9 @@
 
 用户于2026-11-14确认板上服务已运行；当前工作区的Actions流程新增原生linux/amd64与linux/arm64构建、冒烟及多架构GHCR发布配置。是否已有可拉取版本，以实际成功的Actions发布结果为准；本地配置和测试不能代替远端构建或板上升级验证。
 
-日常升级优先使用[GitHub预构建镜像](deployment.md#使用-github-actions-镜像)：把成功发布摘要中的`TEASSISTANT_IMAGE`写入原`.env.deploy`，然后执行`python3 scripts/deploy.py pull`和`python3 scripts/deploy.py up`。板子自动选取ARM64，不重新编译Node/Python或安装TeX/Chromium。下面的`--build`流程保留给首次本地构建和显式排障。
+日常升级优先使用[GitHub预构建镜像](deployment.md#使用-github-actions-镜像)：把同一次成功发布摘要中的`TEASSISTANT_IMAGE`（完整Worker）和`TEASSISTANT_API_IMAGE`（轻量API）一起写入原`.env.deploy`，然后执行`python3 scripts/deploy.py pull`和`python3 scripts/deploy.py up`。板子自动选取ARM64，不重新编译Node/Python或安装TeX/Chromium。需要在本地构建轻量API时还应设置`TEASSISTANT_API_TARGET=api`；未设置新键的旧配置仍使用完整镜像。下面的`--build`流程保留给首次本地构建和显式排障。
+
+已有单镜像部署首次切换时，先同步本次 `compose.yaml` 和 `scripts/deploy.py`，再补齐原配置的新键。保留原 `.env.deploy`、数据库密码、项目名和数据卷；旧 Compose 文件不会使用新增的 API 镜像配置。
 
 ## 1 环境确认
 
