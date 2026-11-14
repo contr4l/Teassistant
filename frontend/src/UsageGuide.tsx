@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { ArrowRight, X } from 'lucide-react'
 import './usage-guide.css'
+import { useBackToClose } from './router'
 
 export type UsageGuideView = 'students' | 'exam' | 'practice'
 
@@ -37,6 +38,7 @@ export default function UsageGuide({ onClose, onNavigate }: UsageGuideProps) {
   const skipNextCloseEvent = useRef(false)
   const callbacks = useRef({ onClose, onNavigate })
   callbacks.current = { onClose, onNavigate }
+  useBackToClose(() => callbacks.current.onClose())
 
   useEffect(() => {
     const dialog = dialogRef.current

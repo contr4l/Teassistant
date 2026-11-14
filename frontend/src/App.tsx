@@ -4,6 +4,8 @@ import AdminBank from './AdminBank'
 import { SanitizedPreview } from './SafePreview'
 import UsageGuide from './UsageGuide'
 import { MathBlock, MathText } from './MathText'
+import { setNavigationBlocker, useBackToClose, useHashRoute, type Route, type View } from './router'
+import { prepareUpload } from './imageUpload'
 import {
   Activity,
   AlertCircle,
@@ -13,10 +15,13 @@ import {
   BookOpenCheck,
   Check,
   CheckCircle2,
+  Camera,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  Images,
   CircleHelp,
   ClipboardList,
-  CloudUpload,
   Download,
   FileCheck2,
   FileSearch2,
@@ -26,7 +31,6 @@ import {
   ListChecks,
   LoaderCircle,
   LogOut,
-  Menu,
   Plus,
   RotateCcw,
   Save,
@@ -42,10 +46,10 @@ import {
   api,
   apiBlob,
   createJobForExam,
-  formatBytes,
   getCurrentSession,
   Job,
   pollJob,
+  newClientId,
   readableJobError,
   safeApiHref,
   setCsrfToken,
@@ -61,7 +65,6 @@ import {
   Practice,
 } from './api'
 
-type View = 'home' | 'students' | 'exam' | 'practice' | 'admin'
 type Notice = { kind: 'success' | 'error' | 'info'; text: string }
 type ExamAnalysisResponse = {
   analysis: Record<string, any>
@@ -83,12 +86,14 @@ const DIFFICULTIES: { key: Difficulty; label: string; color: string }[] = [
   { key: 'advanced', label: '挑战', color: 'rose' },
 ]
 
+// Same entries, names and order on desktop (sidebar) and phone (bottom tab bar); see docs/ui-guidelines.md §8.
 const NAV_ITEMS: { id: View; label: string; icon: typeof LayoutDashboard }[] = [
   { id: 'home', label: '工作台', icon: LayoutDashboard },
-  { id: 'students', label: '学生档案', icon: Users },
   { id: 'exam', label: '考试分析', icon: ClipboardList },
+  { id: 'students', label: '学生档案', icon: Users },
   { id: 'practice', label: '组卷', icon: BookOpenCheck },
 ]
+const TAB_ITEMS: { id: View; label: string; icon: typeof LayoutDashboard }[] = [...NAV_ITEMS, { id: 'me', label: '我的', icon: UserRound }]
 
 function arrayOf<T>(value: unknown): T[] {
   return Array.isArray(value) ? value as T[] : []
@@ -202,6 +207,7 @@ function ModalFrame({ className, label, labelledBy, onClose, children }: {
   const ref = useRef<HTMLDivElement>(null)
   const closeRef = useRef(onClose)
   closeRef.current = onClose
+  useBackToClose(() => closeRef.current())
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null
     const dialog = ref.current
@@ -263,11 +269,11 @@ function App() {
   const [authLoading, setAuthLoading] = useState(true)
   const [loginBusy, setLoginBusy] = useState(false)
   const [loginError, setLoginError] = useState('')
-  const [view, setView] = useState<View>('home')
-  const [mobileNavOpen, setMobileNavOpen] = useState(false)
+  const { route, go, back } = useHashRoute()
+  const isPhone = useIsPhone()
+  const view = route.view
   const [usageGuideOpen, setUsageGuideOpen] = useState(false)
-  const usageGuideTrigger = useRef<HTMLButtonElement>(null)
-  const mobileMenuTrigger = useRef<HTMLButtonElement>(null)
+  const usageGuideOpener = useRef<HTMLElement | null>(null)
   const [students, setStudents] = useState<Student[]>([])
   const [curriculum, setCurriculum] = useState<Curriculum | null>(null)
   const [selectedStudentId, setSelectedStudentId] = useState('')
@@ -279,9 +285,26 @@ function App() {
   const [studentsError, setStudentsError] = useState('')
   const [bootSlow, setBootSlow] = useState(false)
   const [examsLoading, setExamsLoading] = useState(false)
+  // Student whose exam list is currently loaded; drafts and checks wait until the list belongs to the selected student.
+  const [examsFor, setExamsFor] = useState('')
   const [examsError, setExamsError] = useState('')
-  const [examCreateRequest, setExamCreateRequest] = useState(0)
   const [examReload, setExamReload] = useState(0)
+  // Upload progress lives here so it survives switching tabs while photos are still uploading.
+  const [uploadQueue, setUploadQueue] = useState<UploadItem[]>([])
+  // A view with unsaved input registers a warning; navigation asks before discarding it.
+  const leaveWarning = useRef<string | null>(null)
+  const setLeaveWarning = useCallback((message: string | null) => { leaveWarning.current = message }, [])
+  // The phone/browser back button asks too; choosing 取消 keeps the teacher on the form with input intact.
+  useEffect(() => {
+    setNavigationBlocker(() => {
+      const message = leaveWarning.current
+      if (!message) return true
+      if (!window.confirm(message)) return false
+      leaveWarning.current = null
+      return true
+    })
+    return () => setNavigationBlocker(null)
+  }, [])
 
   const notify = useCallback((kind: Notice['kind'], text: string) => {
     setNotice({ kind, text })
@@ -327,6 +350,20 @@ function App() {
   useEffect(() => { if (session) void loadWorkspace() }, [session, loadWorkspace])
 
   useEffect(() => {
+    const onBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (leaveWarning.current || uploadQueue.some((item) => item.status === 'uploading' || item.status === 'waiting')) { event.preventDefault(); event.returnValue = '' }
+    }
+    window.addEventListener('beforeunload', onBeforeUnload)
+    return () => window.removeEventListener('beforeunload', onBeforeUnload)
+  }, [uploadQueue])
+
+  // The URL is the source of truth for where the teacher is; mirror it into the current selection.
+  useEffect(() => {
+    if (route.s) setSelectedStudentId(route.s)
+    if (route.view === 'students' && route.item && route.item !== 'new') setSelectedStudentId(route.item)
+  }, [route])
+
+  useEffect(() => {
     if (!session || !selectedStudentId) { setExams([]); setSelectedExamId(''); return }
     let active = true
     setExamsLoading(true)
@@ -337,6 +374,7 @@ function App() {
         if (!active) return
         const normalized = arrayOf<unknown>(rows).map(normalizeExam)
         setExams(normalized)
+        setExamsFor(selectedStudentId)
         setSelectedExamId((current) => current && normalized.some((exam) => exam.id === current)
           ? current : normalized[0]?.id ?? '')
       })
@@ -345,13 +383,16 @@ function App() {
     return () => { active = false }
   }, [session, selectedStudentId, examReload])
 
-  const refreshExams = useCallback(async (studentId = selectedStudentId) => {
+  const currentStudentRef = useRef('')
+  currentStudentRef.current = selectedStudentId
+  // Background uploads may finish after the teacher switched student; only refresh the list that is on screen.
+  const refreshExams = useCallback(async (studentId = currentStudentRef.current) => {
     if (!studentId) return [] as Exam[]
     const rows = await api<unknown[]>(`/students/${encodeURIComponent(studentId)}/exams`)
     const normalized = arrayOf<unknown>(rows).map(normalizeExam)
-    setExams(normalized)
+    if (studentId === currentStudentRef.current) setExams(normalized)
     return normalized
-  }, [selectedStudentId])
+  }, [])
 
   const login = async (username: string, password: string) => {
     setLoginBusy(true)
@@ -362,7 +403,7 @@ function App() {
       })
       setCsrfToken(value.csrf_token)
       setSession(value)
-      setView('home')
+      go({ view: 'home' }, { replace: true })
       setUsageGuideOpen(false)
     } catch (error) { setLoginError(messageFor(error)) }
     finally { setLoginBusy(false) }
@@ -379,33 +420,69 @@ function App() {
     setSelectedStudentId('')
     setSelectedExamId('')
     setPractice(null)
+    go({ view: 'home' }, { replace: true })
   }
 
   if (authLoading) return <div className="boot-screen"><Loading /></div>
   if (!session) return <LoginView onLogin={login} busy={loginBusy} error={loginError} />
 
   const selectedStudent = students.find((student) => student.id === selectedStudentId) ?? null
-  const selectedExam = exams.find((exam) => exam.id === selectedExamId) ?? null
+  const studentParam = selectedStudentId || undefined
+  // Detail screens read the id straight from the URL. Never fall back to another record: an unknown id is “找不到”.
+  const routeId = route.item && route.item !== 'new' && route.item !== 'result' ? route.item : ''
+  const routeExam = view === 'exam' && routeId ? exams.find((exam) => exam.id === routeId) ?? null : null
+  const examNotFound = view === 'exam' && Boolean(routeId) && !routeExam && !examsLoading && !bootLoading
+  const selectedExam = view === 'exam' && routeId ? routeExam : isPhone ? null : exams.find((exam) => exam.id === selectedExamId) ?? null
+  const routeStudent = view === 'students' && routeId ? students.find((student) => student.id === routeId) ?? null : null
+  const studentNotFound = view === 'students' && Boolean(routeId) && !routeStudent && !bootLoading
+  const editorStudent = view === 'students' && routeId ? routeStudent : isPhone ? null : selectedStudent
 
-  const navigate = (next: View) => { setView(next); setMobileNavOpen(false) }
+  // Uploads keep running in the background (queue lives in App), so only unsaved form input needs a confirmation.
+  const confirmLeave = () => {
+    const message = leaveWarning.current
+    if (!message) return true
+    if (!window.confirm(message)) return false
+    leaveWarning.current = null
+    return true
+  }
+  // Tabs behave like an app: switching tabs does not stack history; back from any tab root returns to 工作台.
+  const navigate = (next: View) => {
+    if (!confirmLeave()) return
+    const target = { view: next, s: next === 'me' || next === 'admin' ? undefined : studentParam }
+    go(target, { replace: view !== 'home' && !route.item })
+  }
+  const goGuarded: typeof go = (next, options) => { if (confirmLeave()) go(next, options) }
+  const backGuarded = (fallback: Route) => { if (confirmLeave()) back(fallback) }
+  // Switching student from a selector stays on the same screen and does not add a history step.
+  const switchStudent = (id: string) => {
+    setSelectedStudentId(id)
+    go({ view, s: id || undefined }, { replace: true })
+  }
+  const openUsageGuide = () => { usageGuideOpener.current = document.activeElement as HTMLElement | null; setUsageGuideOpen(true) }
   const closeUsageGuide = () => {
     setUsageGuideOpen(false)
-    window.requestAnimationFrame(() => {
-      const target = window.matchMedia('(max-width: 920px)').matches
-        ? mobileMenuTrigger.current : usageGuideTrigger.current
-      target?.focus()
-    })
+    window.requestAnimationFrame(() => usageGuideOpener.current?.focus?.())
   }
+
+  const detail = Boolean(route.item)
+  const mobileTitle = view === 'exam'
+    ? route.item === 'new' ? '新建考试' : route.item ? (selectedExam?.title ?? '考试详情') : '考试分析'
+    : view === 'students'
+      ? route.item === 'new' ? '新增学生' : route.item ? (routeStudent?.name ?? '学生详情') : '学生档案'
+      : view === 'practice' ? (route.item === 'result' ? '练习卷' : '组卷')
+        : view === 'me' ? '我的' : view === 'admin' ? '管理设置' : '工作台'
+  const showBack = detail || view === 'admin'
+  const backTarget: Route = view === 'admin' ? { view: 'me' } : { view, s: route.s ?? studentParam }
 
   return (
     <div className="app-shell">
-      <aside className={`sidebar ${mobileNavOpen ? 'sidebar-open' : ''}`}>
+      <aside className="sidebar">
         <div className="sidebar-brand"><div className="brand-mark">题</div><div><b>Teassistant</b><small>教师工作台</small></div></div>
         <p className="workspace-tag">初中数学（湖南）</p>
         <nav className="main-nav" aria-label="主导航">
-          {NAV_ITEMS.map(({ id, label, icon: Icon }) => (
-            <button className={`nav-item ${view === id ? 'active' : ''}`} key={id} onClick={() => navigate(id)}>
-              <Icon size={18} strokeWidth={1.8} /><span>{label}</span>{id === 'exam' && exams.length > 0 && <small>{exams.length}</small>}
+          {TAB_ITEMS.map(({ id, label, icon: Icon }) => (
+            <button className={`nav-item ${view === id ? 'active' : ''}`} key={id} onClick={() => navigate(id)} aria-current={view === id ? 'page' : undefined}>
+              <Icon size={18} strokeWidth={1.8} /><span>{label}</span>
             </button>
           ))}
           {session.user.role === 'admin' && <>
@@ -416,106 +493,179 @@ function App() {
           </>}
         </nav>
         <div className="sidebar-bottom">
-          <button type="button" className="help-link" ref={usageGuideTrigger} aria-haspopup="dialog" aria-controls="usage-guide" aria-expanded={usageGuideOpen} onClick={() => { setMobileNavOpen(false); setUsageGuideOpen(true) }}><CircleHelp size={16} />了解使用方式</button>
-          <button className="account-row" onClick={logout} title="退出登录">
+          <button type="button" className="help-link" aria-haspopup="dialog" aria-controls="usage-guide" aria-expanded={usageGuideOpen} onClick={openUsageGuide}><CircleHelp size={16} />了解使用方式</button>
+          <button className="account-row" onClick={() => navigate('me')} title="我的：账号、使用方式、退出登录">
             <span className="avatar avatar-sm">{session.user.display_name.slice(0, 1) || '师'}</span>
             <span className="account-copy"><b>{session.user.display_name}</b><small>{session.user.role === 'admin' ? '管理员' : '任课老师'}</small></span>
-            <LogOut size={16} />
+            <ChevronRight size={16} />
           </button>
         </div>
       </aside>
-      {mobileNavOpen && <button className="mobile-scrim" onClick={() => setMobileNavOpen(false)} aria-label="关闭导航" />}
       <main className="main-area">
         <header className="topbar">
-          <button className="mobile-menu" ref={mobileMenuTrigger} onClick={() => setMobileNavOpen(true)} aria-label="打开导航"><Menu size={21} /></button>
           <div className="topbar-right">
             {selectedStudent && <span className="current-student">当前学生：<b>{selectedStudent.name}</b></span>}
             <span className="today-label">{new Intl.DateTimeFormat('zh-CN', { month: 'long', day: 'numeric', weekday: 'short' }).format(new Date())}</span>
           </div>
         </header>
-        <div className="page-wrap">
+        <header className="mobile-header">
+          {showBack ? <button type="button" className="mobile-back" onClick={() => backGuarded(backTarget)}><ChevronLeft size={22} />返回</button> : <span className="mobile-header-spacer" />}
+          <h1>{mobileTitle}</h1>
+          <span className="mobile-header-spacer" />
+        </header>
+        <div className={`page-wrap view-${view} ${detail ? 'is-detail' : 'is-list'}`}>
           {bootLoading && <div className="workspace-banner"><LoaderCircle className="spin" size={16} /> 正在加载学生和考点目录…{bootSlow && <span>加载较慢，可刷新页面重试。</span>}</div>}
           {!bootLoading && studentsError && <div className="workspace-banner banner-error"><AlertCircle size={16} /><span>学生列表加载失败：{studentsError}</span><button type="button" className="banner-retry" onClick={() => void loadWorkspace()}>重试</button></div>}
           {!bootLoading && !curriculum && <div className="workspace-banner banner-error"><AlertCircle size={16} /><span>考点目录加载失败，学生进度和组卷暂不可用。</span><button type="button" className="banner-retry" onClick={() => void loadWorkspace()}>重试</button></div>}
           {!bootLoading && examsError && <div className="workspace-banner banner-error"><AlertCircle size={16} /><span>考试记录加载失败：{examsError}</span><button type="button" className="banner-retry" onClick={() => setExamReload((value) => value + 1)}>重试</button></div>}
           {view === 'home' && !bootLoading && !studentsError && <HomeView
             user={session.user} students={students} exams={exams} examsLoading={examsLoading} examsError={examsError} curriculum={curriculum} selectedStudentId={selectedStudentId}
-            onNewExam={() => { setExamCreateRequest((value) => value + 1); navigate('exam') }}
-            onNavigate={navigate} onSelectStudent={setSelectedStudentId}
-            onOpenExam={(exam) => { setSelectedStudentId(exam.student_id); setSelectedExamId(exam.id); navigate('exam') }}
-            onCreateStudent={() => navigate('students')}
+            onNewExam={() => students.length ? goGuarded({ view: 'exam', item: 'new', s: studentParam }) : goGuarded({ view: 'students', item: 'new' })}
+            onNavigate={navigate} onSelectStudent={switchStudent}
+            onOpenExam={(exam) => goGuarded({ view: 'exam', item: exam.id, s: exam.student_id })}
+            onPracticeFor={(exam) => goGuarded({ view: 'practice', s: exam.student_id, e: exam.id })}
+            onCreateStudent={() => goGuarded({ view: 'students', item: 'new' })}
           />}
           {view === 'students' && <StudentsView
-            students={students} curriculum={curriculum} selectedStudent={selectedStudent}
-            onSelectStudent={setSelectedStudentId} onSaved={async (student) => {
+            students={students} curriculum={curriculum} selectedStudent={editorStudent} notFound={studentNotFound} detailKey={route.item ?? ''}
+            creating={route.item === 'new'} onLeaveWarning={setLeaveWarning}
+            onOpenStudent={(id) => goGuarded({ view: 'students', item: id })}
+            onStartCreate={() => goGuarded({ view: 'students', item: 'new' })}
+            onCancelCreate={() => backGuarded({ view: 'students' })}
+            onSaved={async (student, created) => {
               setStudents((rows) => rows.some((row) => row.id === student.id)
                 ? rows.map((row) => row.id === student.id ? student : row)
                 : [student, ...rows])
               setSelectedStudentId(student.id)
-              notify('success', '学生资料与教学进度已保存')
+              if (created) setLeaveWarning(null); go({ view: 'students', item: student.id }, { replace: true })
+              notify('success', created ? '学生已添加，请勾选已学考点' : '学生资料与已学考点已保存')
             }} onError={(text) => notify('error', text)}
           />}
           {view === 'exam' && <ExamView
-            students={students} exams={exams} examsLoading={examsLoading} createRequest={examCreateRequest} selectedStudentId={selectedStudentId} selectedExam={selectedExam}
+            students={students} exams={exams} examsLoading={examsLoading} creating={route.item === 'new'} selectedStudentId={selectedStudentId}
+            selectedExam={selectedExam} notFound={examNotFound} uploadQueue={uploadQueue} setUploadQueue={setUploadQueue} onLeaveWarning={setLeaveWarning}
+            onCreateStudent={() => goGuarded({ view: 'students', item: 'new' })}
             selectedStudent={selectedStudent} curriculum={curriculum}
-            onSelectStudent={setSelectedStudentId} onSelectExam={setSelectedExamId}
+            onSelectStudent={switchStudent}
+            onOpenExam={(id) => goGuarded({ view: 'exam', item: id, s: studentParam })}
+            onStartCreate={() => goGuarded({ view: 'exam', item: 'new', s: studentParam })}
+            onCancelCreate={() => backGuarded({ view: 'exam', s: studentParam })}
+            onPracticeFor={(exam) => goGuarded({ view: 'practice', s: exam.student_id, e: exam.id })}
             onCreated={async (exam) => {
               setSelectedExamId(exam.id)
               await refreshExams(exam.student_id)
-              notify('success', '考试记录已创建，可以开始上传材料')
+              setLeaveWarning(null); go({ view: 'exam', item: exam.id, s: exam.student_id }, { replace: true })
+              notify('success', '考试已创建，请上传试卷和学生作答')
             }} onRefresh={refreshExams} notify={notify}
           />}
           {view === 'practice' && <PracticeView
-            students={students} selectedStudentId={selectedStudentId} exams={exams} curriculum={curriculum}
-            practice={practice} onSelectStudent={setSelectedStudentId} onPracticeChange={setPractice}
+            students={students} selectedStudentId={selectedStudentId} exams={exams} examsLoading={examsLoading || examsFor !== selectedStudentId} curriculum={curriculum}
+            practice={practice} onSelectStudent={switchStudent} onPracticeChange={setPractice}
+            presetExamId={route.e} showResult={route.item === 'result'}
+            onShowResult={() => goGuarded({ view: 'practice', item: 'result', s: studentParam })}
+            onShowSettings={() => back({ view: 'practice', s: studentParam })}
             onError={notifyError} onNotice={notify}
           />}
+          {view === 'me' && <MeView user={session.user} onGuide={openUsageGuide} onAdmin={() => goGuarded({ view: 'admin' })} onLogout={() => void logout()} />}
           {view === 'admin' && session.user.role === 'admin' && <AdminView onNotice={notify} />}
           {view === 'admin' && session.user.role !== 'admin' && <EmptyState icon={<ShieldCheck />} title="此区域仅管理员可见" detail="当前账号没有管理设置权限。" />}
         </div>
       </main>
+      <nav className="tabbar" aria-label="主导航">
+        {TAB_ITEMS.map(({ id, label, icon: Icon }) => {
+          const active = view === id || (id === 'me' && view === 'admin')
+          return <button type="button" key={id} className={`tab-item ${active ? 'active' : ''}`} aria-current={active ? 'page' : undefined} onClick={() => navigate(id)}>
+            <Icon size={24} strokeWidth={active ? 2.2 : 1.8} /><span>{label}</span>
+          </button>
+        })}
+      </nav>
       {usageGuideOpen && <UsageGuide onClose={closeUsageGuide} onNavigate={(next) => { closeUsageGuide(); navigate(next) }} />}
       {notice && <div className={`toast toast-${notice.kind}`} role="status"><span>{notice.kind === 'success' ? <CheckCircle2 size={18} /> : notice.kind === 'error' ? <AlertCircle size={18} /> : <Activity size={18} />}</span>{notice.text}<button onClick={() => setNotice(null)} aria-label="关闭提醒"><X size={16} /></button></div>}
     </div>
   )
 }
 
+function useIsPhone() {
+  const query = '(max-width: 920px)'
+  const [matches, setMatches] = useState(() => window.matchMedia(query).matches)
+  useEffect(() => {
+    const media = window.matchMedia(query)
+    const onChange = () => setMatches(media.matches)
+    media.addEventListener('change', onChange)
+    return () => media.removeEventListener('change', onChange)
+  }, [])
+  return matches
+}
+
+function MeView({ user, onGuide, onAdmin, onLogout }: { user: User; onGuide: () => void; onAdmin: () => void; onLogout: () => void }) {
+  return <>
+    <div className="page-heading"><div><h1>我的</h1></div></div>
+    <section className="panel me-card">
+      <span className="avatar">{user.display_name.slice(0, 1) || '师'}</span>
+      <span className="me-card-copy"><b>{user.display_name}</b><small>{user.role === 'admin' ? '管理员' : '任课老师'} · 初中数学（湖南）</small></span>
+    </section>
+    <section className="panel me-list">
+      <button type="button" className="me-row" onClick={onGuide} aria-haspopup="dialog"><CircleHelp size={22} /><span>使用方式</span><ChevronRight size={20} /></button>
+      {user.role === 'admin' && <button type="button" className="me-row" onClick={onAdmin}><Settings2 size={22} /><span>管理设置</span><ChevronRight size={20} /></button>}
+      <button type="button" className="me-row me-row-danger" onClick={onLogout}><LogOut size={22} /><span>退出登录</span></button>
+    </section>
+  </>
+}
+
 export default App
 
-function HomeView({ user, students, exams, examsLoading, examsError, curriculum, selectedStudentId, onNavigate, onNewExam, onSelectStudent, onOpenExam, onCreateStudent }: {
+type NextAction = { label: string; kind: 'open' | 'practice'; tone: 'primary' | 'secondary' }
+
+/** One next step per exam, derived only from uploaded assets and the analysis job status. */
+function nextActionFor(exam: Exam): NextAction {
+  const hasPaper = exam.assets.some((asset) => asset.role === 'paper')
+  const hasResponse = exam.assets.some((asset) => asset.role === 'response')
+  const status = exam.analysis_job?.status
+  if (status === 'queued' || status === 'running') return { label: '查看进度', kind: 'open', tone: 'secondary' }
+  if (status === 'failed') return { label: '查看原因', kind: 'open', tone: 'primary' }
+  if (status === 'partial') return { label: '去核对', kind: 'open', tone: 'primary' }
+  if (status === 'completed') return { label: '组卷', kind: 'practice', tone: 'primary' }
+  if (!hasPaper || !hasResponse) return { label: '继续上传', kind: 'open', tone: 'primary' }
+  return { label: '开始分析', kind: 'open', tone: 'primary' }
+}
+
+function HomeView({ user, students, exams, examsLoading, examsError, curriculum, selectedStudentId, onNavigate, onNewExam, onSelectStudent, onOpenExam, onPracticeFor, onCreateStudent }: {
   user: User; students: Student[]; exams: Exam[]; examsLoading: boolean; examsError: string; curriculum: Curriculum | null; selectedStudentId: string
-  onNavigate: (view: View) => void; onNewExam: () => void; onSelectStudent: (id: string) => void; onOpenExam: (exam: Exam) => void; onCreateStudent: () => void
+  onNavigate: (view: View) => void; onNewExam: () => void; onSelectStudent: (id: string) => void; onOpenExam: (exam: Exam) => void
+  onPracticeFor: (exam: Exam) => void; onCreateStudent: () => void
 }) {
   const hour = new Date().getHours()
   const greeting = hour < 11 ? '早上好' : hour < 18 ? '下午好' : '晚上好'
   const selectedStudent = students.find((student) => student.id === selectedStudentId) ?? null
   const needsReview = exams.filter((exam) => ['partial', 'failed'].includes(exam.analysis_job?.status ?? '')).length
+  const runAction = (exam: Exam) => nextActionFor(exam).kind === 'practice' ? onPracticeFor(exam) : onOpenExam(exam)
   return (
     <>
       <div className="page-heading">
         <div><h1>工作台</h1><p>{greeting}，{user.display_name}</p></div>
-        <div className="heading-actions">
-          <Button variant="secondary" onClick={() => onNavigate('practice')} icon={<BookOpenCheck size={16} />}>组卷</Button>
-          <Button onClick={onNewExam} icon={<Plus size={16} />}>新建考试</Button>
-        </div>
       </div>
-      {students.length === 0 ? <section className="panel"><EmptyState icon={<Users />} title="还没有学生" detail="先添加学生并勾选已学考点，再上传考试。" action={<Button size="sm" onClick={onCreateStudent} icon={<Plus size={14} />}>新增学生</Button>} /></section> : <div className="home-grid">
+      <div className="home-entry">
+        <button type="button" className="entry-card entry-primary" onClick={onNewExam}><Camera size={28} /><span><b>上传考试</b><small>拍照或选择试卷、学生作答</small></span></button>
+        <button type="button" className="entry-card" onClick={() => onNavigate('practice')}><BookOpenCheck size={28} /><span><b>组卷</b><small>按考点出练习卷，下载 PDF</small></span></button>
+      </div>
+      {students.length === 0 ? <section className="panel"><EmptyState icon={<Users />} title="还没有学生" detail="先添加学生并勾选已学考点，再上传考试。" action={<Button onClick={onCreateStudent} icon={<Plus size={16} />}>新增学生</Button>} /></section> : <div className="home-grid">
         <section className="panel home-exams">
           <div className="section-heading">
             <h2>考试记录</h2>
             <label className="inline-select"><span>学生</span><select value={selectedStudentId} onChange={(e) => onSelectStudent(e.target.value)}>{students.map((student) => <option key={student.id} value={student.id}>{student.name}（{gradeLabel(student.grade)}）</option>)}</select></label>
           </div>
           {needsReview > 0 && <p className="home-review-note"><AlertCircle size={15} />{needsReview} 场考试的分析含待核对项或失败，需要查看。</p>}
-          {examsLoading ? <Loading label="正在加载考试记录…" /> : examsError ? <p className="inline-error">考试记录加载失败，请点击页面顶部的“重试”。</p> : exams.length ? <table className="record-table">
-            <thead><tr><th>考试</th><th>日期</th><th className="num">材料</th><th>分析</th><th aria-label="操作" /></tr></thead>
-            <tbody>{exams.map((exam) => <tr key={exam.id} onClick={() => onOpenExam(exam)}>
-              <td className="record-title">{exam.title}</td>
-              <td className="nowrap">{dateLabel(exam.exam_date)}</td>
-              <td className="num">{exam.assets.length} 份</td>
-              <td><span className={`status-pill status-${exam.analysis_job?.status ?? 'queued'}`}>{exam.analysis_job ? homeStatusText(exam.analysis_job.status) : '未分析'}</span></td>
-              <td className="row-action"><button type="button" className="text-action" onClick={(event) => { event.stopPropagation(); onOpenExam(exam) }}>查看<ArrowRight size={14} /></button></td>
-            </tr>)}</tbody>
-          </table> : <div className="empty-inline"><span>{selectedStudent ? `${selectedStudent.name}暂无考试记录` : '暂无考试记录'}</span><Button size="sm" onClick={onNewExam} icon={<Plus size={14} />}>新建考试</Button></div>}
+          {examsLoading ? <Loading label="正在加载考试记录…" /> : examsError ? <p className="inline-error">考试记录加载失败，请点击页面顶部的“重试”。</p> : exams.length ? <ul className="exam-cards">{exams.map((exam) => {
+            const action = nextActionFor(exam)
+            return <li key={exam.id} className="exam-card">
+              <button type="button" className="exam-card-main" onClick={() => onOpenExam(exam)}>
+                <b>{exam.title}</b>
+                <small>{dateLabel(exam.exam_date)} · 材料 {exam.assets.length} 份</small>
+                <span className={`status-pill status-${exam.analysis_job?.status ?? 'queued'}`}>{exam.analysis_job ? homeStatusText(exam.analysis_job.status) : '未分析'}</span>
+              </button>
+              <button type="button" className={`button ${action.tone === 'primary' ? 'button-outline' : 'button-secondary'} button-md exam-card-action`} onClick={() => runAction(exam)}>{action.label}</button>
+            </li>
+          })}</ul> : <div className="empty-inline"><span>{selectedStudent ? `${selectedStudent.name}暂无考试记录` : '暂无考试记录'}</span><Button onClick={onNewExam} icon={<Plus size={16} />}>新建考试</Button></div>}
         </section>
         <section className="panel home-students">
           <div className="section-heading"><h2>学生</h2><button className="text-action" onClick={() => onNavigate('students')}>管理<ArrowRight size={14} /></button></div>
@@ -534,22 +684,33 @@ function homeStatusText(status?: string) {
   return status === 'partial' ? '含待核对项' : statusText(status)
 }
 
-function StudentsView({ students, curriculum, selectedStudent, onSelectStudent, onSaved, onError }: {
-  students: Student[]; curriculum: Curriculum | null; selectedStudent: Student | null
-  onSelectStudent: (id: string) => void; onSaved: (student: Student) => void; onError: (text: string) => void
+function StudentsView({ students, curriculum, selectedStudent, notFound, detailKey, creating, onLeaveWarning, onOpenStudent, onStartCreate, onCancelCreate, onSaved, onError }: {
+  students: Student[]; curriculum: Curriculum | null; selectedStudent: Student | null; notFound: boolean; detailKey: string; creating: boolean
+  onLeaveWarning: (message: string | null) => void
+  onOpenStudent: (id: string) => void; onStartCreate: () => void; onCancelCreate: () => void
+  onSaved: (student: Student, created: boolean) => void; onError: (text: string) => void
 }) {
-  const [creating, setCreating] = useState(false)
   const [saving, setSaving] = useState(false)
   const [query, setQuery] = useState('')
   const [form, setForm] = useState({ name: '', school: '', grade: 7 as 7 | 8 | 9 })
   const [learned, setLearned] = useState<string[]>([])
   const pointMap = useMemo(() => new Map((curriculum?.points ?? []).map((point) => [point.id, point])), [curriculum])
 
+  useEffect(() => { if (creating) setForm({ name: '', school: '', grade: 7 }) }, [creating])
+
+  // Re-entering a student (detailKey) always shows the saved data, never an earlier unsaved edit.
   useEffect(() => {
     if (!selectedStudent || creating) return
     setForm({ name: selectedStudent.name, school: selectedStudent.school ?? '', grade: selectedStudent.grade })
     setLearned(selectedStudent.learned_point_ids)
-  }, [selectedStudent, creating])
+  }, [selectedStudent, creating, detailKey])
+
+  const dirty = creating
+    ? Boolean(form.name.trim() || form.school.trim())
+    : Boolean(selectedStudent) && (form.name !== selectedStudent!.name || form.school !== (selectedStudent!.school ?? '') || form.grade !== selectedStudent!.grade
+      || learned.length !== selectedStudent!.learned_point_ids.length || learned.some((id) => !selectedStudent!.learned_point_ids.includes(id)))
+  useEffect(() => { onLeaveWarning(dirty && !saving ? '学生资料有修改还没有保存，离开后会丢失。确定离开吗？' : null) }, [dirty, saving, onLeaveWarning])
+  useEffect(() => () => onLeaveWarning(null), [onLeaveWarning])
 
   const visibleStudents = students.filter((student) => `${student.name} ${student.school}`.toLowerCase().includes(query.toLowerCase()))
   const togglePoint = (id: string) => setLearned((values) => values.includes(id) ? values.filter((item) => item !== id) : [...values, id])
@@ -558,9 +719,7 @@ function StudentsView({ students, curriculum, selectedStudent, onSelectStudent, 
     setSaving(true)
     try {
       const raw = await api<unknown>('/students', { method: 'POST', body: JSON.stringify({ ...form, learned_point_ids: [] }) })
-      onSaved(normalizeStudent(raw))
-      setCreating(false)
-      setForm({ name: '', school: '', grade: 7 })
+      onSaved(normalizeStudent(raw), true)
     } catch (error) { onError(`创建学生失败：${messageFor(error)}`) }
     finally { setSaving(false) }
   }
@@ -575,19 +734,19 @@ function StudentsView({ students, curriculum, selectedStudent, onSelectStudent, 
           learned_point_ids: learned, expected_revision: selectedStudent.progress_revision,
         }),
       })
-      onSaved(normalizeStudent(raw))
+      onSaved(normalizeStudent(raw), false)
     } catch (error) { onError(`保存失败：${messageFor(error)}`) }
     finally { setSaving(false) }
   }
 
   return (
     <>
-      <div className="page-heading"><div><h1>学生档案</h1><p>勾选的已学考点决定组卷范围。</p></div><Button onClick={() => { setCreating(true); onSelectStudent('') }} icon={<Plus size={16} />}>新增学生</Button></div>
+      <div className="page-heading"><div><h1>学生档案</h1><p>勾选的已学考点决定组卷范围。</p></div><Button onClick={onStartCreate} icon={<Plus size={16} />}>新增学生</Button></div>
       <div className="students-layout">
         <section className="panel students-list-panel">
           <div className="list-search"><Search size={16} /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="搜索姓名或学校" /></div>
-          {students.length === 0 ? <EmptyState icon={<Users />} title="还没有学生" detail="添加学生后可记录已学考点和考试。" action={<Button size="sm" onClick={() => setCreating(true)} icon={<Plus size={14} />}>新增学生</Button>} /> : <div className="student-list">
-            {visibleStudents.map((student) => <button key={student.id} className={`student-list-item ${!creating && selectedStudent?.id === student.id ? 'selected' : ''}`} onClick={() => { setCreating(false); onSelectStudent(student.id) }}>
+          {students.length === 0 ? <EmptyState icon={<Users />} title="还没有学生" detail="点击“新增学生”添加第一位学生。" /> : <div className="student-list">
+            {visibleStudents.map((student) => <button key={student.id} className={`student-list-item ${!creating && selectedStudent?.id === student.id ? 'selected' : ''}`} onClick={() => onOpenStudent(student.id)}>
               <span className="avatar">{student.name.slice(0, 1) || '学'}</span><span className="student-mini"><b>{student.name}</b><small>{student.school || '未填写学校'} · {gradeLabel(student.grade)}</small></span><ChevronDown className="student-list-chevron" size={16} />
             </button>)}
             {visibleStudents.length === 0 && <p className="list-empty">没有找到匹配的学生</p>}
@@ -595,13 +754,13 @@ function StudentsView({ students, curriculum, selectedStudent, onSelectStudent, 
           <div className="list-footer"><span>共 {students.length} 位学生</span></div>
         </section>
         <section className="student-editor panel">
-          {creating ? <>
-            <div className="section-heading"><h2>新增学生</h2><button className="icon-button" onClick={() => setCreating(false)} aria-label="取消新增"><X size={17} /></button></div>
+          {notFound ? <EmptyState icon={<UserRound />} title="找不到这位学生" detail="链接可能已失效，或学生不属于当前账号。" action={<Button onClick={onCancelCreate}>返回学生列表</Button>} /> : creating ? <>
+            <div className="section-heading"><h2>新增学生</h2><button className="icon-button" onClick={onCancelCreate} aria-label="取消新增"><X size={17} /></button></div>
             <p className="section-intro">已学考点可在创建后勾选；未勾选前不能组卷。</p>
             <form className="student-form" onSubmit={createStudent}>
               <div className="two-fields"><Field label="姓名 / 称呼"><input required maxLength={100} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="例如：小林" /></Field><Field label="年级"><select value={form.grade} onChange={(e) => setForm({ ...form, grade: Number(e.target.value) as 7 | 8 | 9 })}><option value={7}>初一</option><option value={8}>初二</option><option value={9}>初三</option></select></Field></div>
               <Field label="学校" hint="选填"><input maxLength={160} value={form.school} onChange={(e) => setForm({ ...form, school: e.target.value })} placeholder="学校名称" /></Field>
-              <div className="form-foot"><Button variant="quiet" onClick={() => setCreating(false)}>取消</Button><Button type="submit" disabled={saving} icon={saving ? <LoaderCircle className="spin" size={15} /> : <Plus size={15} />}>{saving ? '创建中…' : '创建'}</Button></div>
+              <div className="form-foot sticky-actions"><Button variant="quiet" onClick={onCancelCreate}>取消</Button><Button type="submit" disabled={saving} icon={saving ? <LoaderCircle className="spin" size={15} /> : <Plus size={15} />}>{saving ? '创建中…' : '创建'}</Button></div>
             </form>
           </> : selectedStudent ? <>
             <div className="section-heading"><h2>{selectedStudent.name}</h2></div>
@@ -618,7 +777,7 @@ function StudentsView({ students, curriculum, selectedStudent, onSelectStudent, 
                 </label>)}
               </div>}
               <p className="progress-note">组卷只选用考点及其前置考点都已勾选的题目。</p>
-              <div className="form-foot"><Button type="submit" disabled={saving} icon={saving ? <LoaderCircle className="spin" size={15} /> : <Save size={15} />}>{saving ? '保存中…' : '保存'}</Button></div>
+              <div className="form-foot sticky-actions"><Button type="submit" disabled={saving} icon={saving ? <LoaderCircle className="spin" size={15} /> : <Save size={15} />}>{saving ? '保存中…' : '保存'}</Button></div>
             </form>
           </> : <EmptyState icon={<UserRound />} title="未选择学生" detail="在左侧选择学生，或点击“新增学生”。" />}
         </section>
@@ -627,18 +786,19 @@ function StudentsView({ students, curriculum, selectedStudent, onSelectStudent, 
   )
 }
 
-function ExamView({ students, exams, examsLoading, createRequest, selectedStudentId, selectedExam, selectedStudent, curriculum, onSelectStudent, onSelectExam, onCreated, onRefresh, notify }: {
-  students: Student[]; exams: Exam[]; examsLoading: boolean; createRequest: number; selectedStudentId: string; selectedExam: Exam | null
+function ExamView({ students, exams, examsLoading, creating, selectedStudentId, selectedExam, notFound, uploadQueue: allUploads, setUploadQueue, onLeaveWarning, onCreateStudent, selectedStudent, curriculum, onSelectStudent, onOpenExam, onStartCreate, onCancelCreate, onPracticeFor, onCreated, onRefresh, notify }: {
+  students: Student[]; exams: Exam[]; examsLoading: boolean; creating: boolean; selectedStudentId: string; selectedExam: Exam | null; notFound: boolean
+  uploadQueue: UploadItem[]; setUploadQueue: React.Dispatch<React.SetStateAction<UploadItem[]>>; onLeaveWarning: (message: string | null) => void; onCreateStudent: () => void
   selectedStudent: Student | null; curriculum: Curriculum | null
-  onSelectStudent: (id: string) => void; onSelectExam: (id: string) => void
+  onSelectStudent: (id: string) => void; onOpenExam: (id: string) => void; onStartCreate: () => void; onCancelCreate: () => void
+  onPracticeFor: (exam: Exam) => void
   onCreated: (exam: Exam) => void; onRefresh: (studentId?: string) => Promise<Exam[]>
   notify: (kind: Notice['kind'], text: string) => void
 }) {
-  const [creating, setCreating] = useState(false)
   const [createBusy, setCreateBusy] = useState(false)
   const [examForm, setExamForm] = useState({ title: '', exam_date: todayIso(), question_count: '', total_score: '', max_score: '', class_rank: '', grade_rank: '' })
-  const [uploadRole, setUploadRole] = useState<'paper' | 'response' | 'reference'>('paper')
-  const [uploadBusy, setUploadBusy] = useState(false)
+  const uploadQueue = allUploads.filter((item) => item.examId === selectedExam?.id)
+  const [previewAsset, setPreviewAsset] = useState<ExamAsset | null>(null)
   const [orderBusy, setOrderBusy] = useState(false)
   const [analysisBusy, setAnalysisBusy] = useState(false)
   const [provider, setProvider] = useState<'deepseek' | 'codex'>('deepseek')
@@ -646,60 +806,110 @@ function ExamView({ students, exams, examsLoading, createRequest, selectedStuden
   const [activeJob, setActiveJob] = useState<Job | null>(null)
   const [analysisData, setAnalysisData] = useState<ExamAnalysisResponse | null>(null)
   const [analysisLoading, setAnalysisLoading] = useState(false)
+  const [jobReadError, setJobReadError] = useState('')
+  const [examStatusLoading, setExamStatusLoading] = useState(false)
   const [editingResponse, setEditingResponse] = useState<Record<string, any> | null>(null)
   const [correctionText, setCorrectionText] = useState('')
   const [correctionNumber, setCorrectionNumber] = useState('')
   const [correctionPart, setCorrectionPart] = useState('')
   const [correctionBusy, setCorrectionBusy] = useState(false)
   const selectedExamIdRef = useRef(selectedExam?.id ?? '')
+  const selectedStudentIdRef = useRef(selectedStudentId)
+  const examMountedRef = useRef(false)
+  const examEpochRef = useRef(0)
+  const analysisReadRef = useRef(0)
   const jobControllerRef = useRef<AbortController | null>(null)
   selectedExamIdRef.current = selectedExam?.id ?? ''
+  selectedStudentIdRef.current = selectedStudentId
 
-  useEffect(() => { if (createRequest > 0) setCreating(true) }, [createRequest])
+  const isCurrentExam = useCallback((examId: string, studentId: string) => (
+    examMountedRef.current && selectedExamIdRef.current === examId && selectedStudentIdRef.current === studentId
+  ), [])
+
+  const loadAnalysis = useCallback(async (examId: string, studentId: string) => {
+    const request = ++analysisReadRef.current
+    setAnalysisLoading(true)
+    try {
+      const value = await api<ExamAnalysisResponse>(`/exams/${encodeURIComponent(examId)}/analysis`)
+      if (isCurrentExam(examId, studentId) && request === analysisReadRef.current) setAnalysisData(value)
+    } catch (error) {
+      if (isCurrentExam(examId, studentId) && request === analysisReadRef.current && !(error instanceof ApiError && error.status === 409)) {
+        notify('error', `读取考试分析失败：${messageFor(error)}`)
+      }
+    } finally {
+      if (isCurrentExam(examId, studentId) && request === analysisReadRef.current) setAnalysisLoading(false)
+    }
+  }, [isCurrentExam, notify])
+
+  const updateJob = useCallback(async (jobId: string) => {
+    const examId = selectedExam?.id
+    const studentId = selectedStudentId
+    if (!examId || !isCurrentExam(examId, studentId)) return
+    jobControllerRef.current?.abort()
+    const controller = new AbortController()
+    jobControllerRef.current = controller
+    setJobReadError('')
+    const current = () => !controller.signal.aborted && isCurrentExam(examId, studentId)
+    try {
+      const finalJob = await pollJob(jobId, (job) => { if (current()) setActiveJob(job) }, controller.signal)
+      if (!current()) return
+      if (finalJob.status === 'completed' || finalJob.status === 'partial') {
+        await onRefresh(studentId)
+        if (!current()) return
+        await loadAnalysis(examId, studentId)
+        if (current()) notify(finalJob.status === 'completed' ? 'success' : 'info', finalJob.status === 'completed' ? '考试分析已完成' : '分析已生成，仍有未确定项目')
+      } else if (finalJob.status === 'failed') {
+        notify('error', `分析失败：${readableJobError(finalJob.error)}`)
+      }
+    } catch (error) {
+      if (current() && !(error instanceof DOMException && error.name === 'AbortError')) {
+        setJobReadError(messageFor(error))
+        notify('error', messageFor(error))
+      }
+    }
+  }, [selectedExam?.id, selectedStudentId, isCurrentExam, onRefresh, loadAnalysis, notify])
 
   useEffect(() => {
     api<{ allow_codex: boolean }>('/capabilities').then((value) => setAllowCodex(Boolean(value.allow_codex))).catch(() => setAllowCodex(false))
   }, [])
 
   useEffect(() => {
-    jobControllerRef.current?.abort()
+    ++examEpochRef.current
+    examMountedRef.current = true
     setAnalysisData(null)
+    setJobReadError('')
+    setAnalysisBusy(false)
+    setCorrectionBusy(false)
+    setEditingResponse(null)
     setActiveJob(selectedExam?.analysis_job ?? null)
-    if (!selectedExam) return
-    let active = true
-    setAnalysisLoading(true)
-    api<ExamAnalysisResponse>(`/exams/${encodeURIComponent(selectedExam.id)}/analysis`)
-      .then((value) => { if (active) setAnalysisData(value) })
-      .catch((error: unknown) => {
-        if (active && !(error instanceof ApiError && error.status === 409)) {
-          notify('error', `读取考试分析失败：${messageFor(error)}`)
-        }
-      })
-      .finally(() => { if (active) setAnalysisLoading(false) })
-    return () => { active = false }
-    return () => { jobControllerRef.current?.abort() }
-  }, [selectedExam?.id, notify])
-
-  const updateJob = async (jobId: string) => {
+    const epoch = examEpochRef.current
     const examId = selectedExam?.id
-    if (!examId) return
-    const controller = new AbortController()
-    jobControllerRef.current = controller
-    try {
-      const finalJob = await pollJob(jobId, (job) => {
-        if (selectedExamIdRef.current === examId) setActiveJob(job)
-      }, controller.signal)
-      if (selectedExamIdRef.current !== examId) return
-      if (finalJob.status === 'completed' || finalJob.status === 'partial') {
-        await onRefresh(selectedStudentId)
-        const updated = await api<ExamAnalysisResponse>(`/exams/${encodeURIComponent(examId)}/analysis`)
-        if (selectedExamIdRef.current === examId) setAnalysisData(updated)
-        notify(finalJob.status === 'completed' ? 'success' : 'info', finalJob.status === 'completed' ? '考试分析已完成' : '分析已生成，仍有未确定项目')
-      } else if (finalJob.status === 'failed') {
-        notify('error', `分析失败：${readableJobError(finalJob.error)}`)
-      }
-    } catch (error) { if (!(error instanceof DOMException && error.name === 'AbortError')) notify('error', messageFor(error)) }
-  }
+    if (examId) {
+      const current = () => epoch === examEpochRef.current && isCurrentExam(examId, selectedStudentId)
+      setExamStatusLoading(true)
+      void loadAnalysis(examId, selectedStudentId)
+      // The cached list may predate a job submitted just before leaving this view.
+      void onRefresh(selectedStudentId).then((rows) => {
+        if (!current()) return
+        const fresh = rows.find((exam) => exam.id === examId && exam.student_id === selectedStudentId)
+        const job = fresh?.analysis_job ?? null
+        setActiveJob(job)
+        if (job && ['queued', 'running'].includes(job.status)) void updateJob(job.id)
+      }).catch((error) => {
+        if (current()) notify('error', `读取考试状态失败：${messageFor(error)}`)
+      }).finally(() => { if (current()) setExamStatusLoading(false) })
+    } else setExamStatusLoading(false)
+    return () => {
+      examMountedRef.current = false
+      ++analysisReadRef.current
+      jobControllerRef.current?.abort()
+    }
+  }, [selectedExam?.id, selectedStudentId, loadAnalysis, updateJob, isCurrentExam, onRefresh, notify])
+
+  const createDirty = creating && Boolean(examForm.title.trim() || examForm.question_count || examForm.total_score || examForm.max_score)
+  useEffect(() => { onLeaveWarning(createDirty && !createBusy ? '新建考试的内容还没有保存，离开后会丢失。确定离开吗？' : null) }, [createDirty, createBusy, onLeaveWarning])
+  useEffect(() => () => onLeaveWarning(null), [onLeaveWarning])
+  useEffect(() => { if (!creating) setExamForm({ title: '', exam_date: todayIso(), question_count: '', total_score: '', max_score: '', class_rank: '', grade_rank: '' }) }, [creating])
 
   const createExam = async (event: React.FormEvent) => {
     event.preventDefault()
@@ -721,39 +931,52 @@ function ExamView({ students, exams, examsLoading, createRequest, selectedStuden
       })
       const created = normalizeExam(raw)
       onCreated(created)
-      setCreating(false)
       setExamForm({ title: '', exam_date: todayIso(), question_count: '', total_score: '', max_score: '', class_rank: '', grade_rank: '' })
     } catch (error) { notify('error', `创建考试失败：${messageFor(error)}`) }
     finally { setCreateBusy(false) }
   }
 
-  const uploadFiles = async (files: FileList | null) => {
-    if (!selectedExam || !files?.length) return
-    setUploadBusy(true)
-    const entries = Array.from(files)
-    let uploaded = 0
+  // Upload one file at a time; keep going after a failure so the teacher can retry just the failed pages.
+  const uploadOne = async (item: UploadItem) => {
+    setUploadQueue((queue) => queue.map((row) => row.key === item.key ? { ...row, status: 'uploading', error: '' } : row))
     try {
-      for (const file of entries) {
-        const form = new FormData()
-        form.set('role', uploadRole)
-        form.set('file', file)
-        await api(`/exams/${encodeURIComponent(selectedExam.id)}/assets`, { method: 'POST', body: form })
-        uploaded += 1
-      }
-      await onRefresh(selectedStudentId)
-      notify('success', `已上传 ${uploaded} 份${roleName(uploadRole)}材料`)
+      const prepared = await prepareUpload(item.file)
+      const form = new FormData()
+      form.set('role', item.role)
+      form.set('file', prepared.file)
+      await api(`/exams/${encodeURIComponent(item.examId)}/assets`, { method: 'POST', body: form })
+      setUploadQueue((queue) => queue.filter((row) => row.key !== item.key))
+      await onRefresh().catch(() => undefined)
+      return true
     } catch (error) {
-      await onRefresh(selectedStudentId).catch(() => undefined)
-      notify('error', `上传在第 ${uploaded + 1} 份材料处停止：${messageFor(error)}。已上传的文件仍保留。`)
-    } finally { setUploadBusy(false) }
+      setUploadQueue((queue) => queue.map((row) => row.key === item.key ? { ...row, status: 'failed', error: messageFor(error) } : row))
+      return false
+    }
+  }
+
+  const uploadFiles = async (files: FileList | null, role: AssetRole) => {
+    if (!selectedExam || !files?.length) return
+    const examId = selectedExam.id
+    const items: UploadItem[] = Array.from(files).map((file) => ({ key: newClientId(), examId, file, role, status: 'waiting', error: '' }))
+    setUploadQueue((queue) => [...queue, ...items])
+    let done = 0
+    for (const item of items) if (await uploadOne(item)) done += 1
+    const failed = items.length - done
+    if (failed === 0) notify('success', `已上传 ${done} 页${roleName(role)}`)
+    else notify('error', `${roleName(role)}有 ${failed} 页没有传上去，请在列表中点“重试”`)
   }
 
   const moveAsset = async (assetId: string, delta: number) => {
     if (!selectedExam || orderBusy) return
     const ordered = [...selectedExam.assets].sort((a, b) => a.ordinal - b.ordinal)
     const index = ordered.findIndex((asset) => asset.id === assetId)
-    const target = index + delta
-    if (index < 0 || target < 0 || target >= ordered.length) return
+    if (index < 0) return
+    // Pages are shown per material type, so “上移/下移” swaps with the neighbouring page of the same type.
+    const sameRole = ordered.map((asset, position) => ({ asset, position })).filter((row) => row.asset.role === ordered[index].role)
+    const roleIndex = sameRole.findIndex((row) => row.asset.id === assetId)
+    const neighbour = sameRole[roleIndex + delta]
+    if (!neighbour) return
+    const target = neighbour.position
     ;[ordered[index], ordered[target]] = [ordered[target], ordered[index]]
     setOrderBusy(true)
     try {
@@ -766,8 +989,12 @@ function ExamView({ students, exams, examsLoading, createRequest, selectedStuden
     finally { setOrderBusy(false) }
   }
 
+  const taskRunning = examStatusLoading || analysisBusy || correctionBusy || ['queued', 'running'].includes(activeJob?.status ?? '')
+
   const analyze = async () => {
-    if (!selectedExam) return
+    if (!selectedExam || taskRunning) return
+    const epoch = examEpochRef.current
+    const current = () => epoch === examEpochRef.current && isCurrentExam(selectedExam.id, selectedStudentId)
     if (!curriculum) { notify('error', '考点目录当前不可用，无法开始分析'); return }
     if (!selectedExam.assets.some((asset) => asset.role === 'paper') || !selectedExam.assets.some((asset) => asset.role === 'response')) {
       notify('error', '分析需要试卷和已批改的学生作答')
@@ -776,22 +1003,26 @@ function ExamView({ students, exams, examsLoading, createRequest, selectedStuden
     setAnalysisBusy(true)
     try {
       const job = unwrap<Job>(await createJobForExam(selectedExam.id, provider))
+      if (!current()) return
       setActiveJob(job)
       notify('info', '考试分析任务已提交')
       await updateJob(job.id)
-    } catch (error) { notify('error', `提交分析失败：${messageFor(error)}`) }
-    finally { setAnalysisBusy(false) }
+    } catch (error) { if (current()) notify('error', `提交分析失败：${messageFor(error)}`) }
+    finally { if (current()) setAnalysisBusy(false) }
   }
 
   const retry = async () => {
-    if (!activeJob) return
+    if (!activeJob || !selectedExam || taskRunning) return
+    const epoch = examEpochRef.current
+    const current = () => epoch === examEpochRef.current && isCurrentExam(selectedExam.id, selectedStudentId)
     setAnalysisBusy(true)
     try {
       const job = unwrap<Job>(await api<Job>(`/jobs/${encodeURIComponent(activeJob.id)}/retry`, { method: 'POST' }))
+      if (!current()) return
       setActiveJob(job)
       await updateJob(job.id)
-    } catch (error) { notify('error', `重试失败：${messageFor(error)}`) }
-    finally { setAnalysisBusy(false) }
+    } catch (error) { if (current()) notify('error', `重试失败：${messageFor(error)}`) }
+    finally { if (current()) setAnalysisBusy(false) }
   }
 
   const openCorrection = (response: Record<string, any>) => {
@@ -803,7 +1034,9 @@ function ExamView({ students, exams, examsLoading, createRequest, selectedStuden
 
   const submitCorrection = async (event: React.FormEvent) => {
     event.preventDefault()
-    if (!selectedExam || !analysisData || !editingResponse) return
+    if (!selectedExam || !analysisData || !editingResponse || taskRunning) return
+    const epoch = examEpochRef.current
+    const current = () => epoch === examEpochRef.current && isCurrentExam(selectedExam.id, selectedStudentId)
     const responseSources = arrayOf<Record<string, any>>(editingResponse.sources)
     if (!responseSources.length) { notify('error', '这条转录没有可用的作答区域证据，暂时不能提交修正'); return }
     const destination = Number(correctionNumber)
@@ -834,7 +1067,7 @@ function ExamView({ students, exams, examsLoading, createRequest, selectedStuden
     setCorrectionBusy(true)
     try {
       const correction = {
-        id: crypto.randomUUID(),
+        id: newClientId(),
         base_revision: String(analysisData.analysis.revision),
         number: destination,
         part_path: correctionPart,
@@ -847,12 +1080,13 @@ function ExamView({ students, exams, examsLoading, createRequest, selectedStuden
       const job = unwrap<Job>(await api<Job>(`/exams/${encodeURIComponent(selectedExam.id)}/corrections`, {
         method: 'POST', body: JSON.stringify({ corrections: [correction] }),
       }))
+      if (!current()) return
       setEditingResponse(null)
       setActiveJob(job)
       notify('info', '修正任务已提交，原分析版本会保留')
       await updateJob(job.id)
-    } catch (error) { notify('error', `提交修正失败：${messageFor(error)}`) }
-    finally { setCorrectionBusy(false) }
+    } catch (error) { if (current()) notify('error', `提交修正失败：${messageFor(error)}`) }
+    finally { if (current()) setCorrectionBusy(false) }
   }
 
   const sortedAssets = [...(selectedExam?.assets ?? [])].sort((a, b) => a.ordinal - b.ordinal)
@@ -861,28 +1095,28 @@ function ExamView({ students, exams, examsLoading, createRequest, selectedStuden
 
   return (
     <>
-      <div className="page-heading"><div><h1>考试分析</h1></div><Button onClick={() => setCreating(true)} icon={<Plus size={16} />}>新建考试</Button></div>
+      <div className="page-heading"><div><h1>考试分析</h1></div><Button onClick={onStartCreate} icon={<Plus size={16} />}>新建考试</Button></div>
       <div className="exam-layout">
         <aside className="panel exam-index">
           <div className="exam-index-head"><h2>考试列表</h2></div>
-          <Field label="学生"><select value={selectedStudentId} onChange={(e) => { onSelectStudent(e.target.value); onSelectExam('') }}><option value="">请选择</option>{students.map((student) => <option key={student.id} value={student.id}>{student.name} · {gradeLabel(student.grade)}</option>)}</select></Field>
-          {!selectedStudentId ? <div className="small-empty">请先选择学生。</div> : examsLoading ? <Loading label="正在加载…" /> : exams.length === 0 ? <div className="small-empty">暂无考试记录</div> : <div className="exam-list">{exams.map((exam) => <button key={exam.id} onClick={() => onSelectExam(exam.id)} className={`exam-list-item ${selectedExam?.id === exam.id ? 'active' : ''}`}>
+          <Field label="学生"><select value={selectedStudentId} onChange={(e) => onSelectStudent(e.target.value)}><option value="">请选择</option>{students.map((student) => <option key={student.id} value={student.id}>{student.name} · {gradeLabel(student.grade)}</option>)}</select></Field>
+          {students.length === 0 ? <div className="small-empty">还没有学生，先新增学生再上传考试。<Button onClick={onCreateStudent} icon={<Plus size={16} />}>新增学生</Button></div> : !selectedStudentId ? <div className="small-empty">请先选择学生。</div> : examsLoading ? <Loading label="正在加载…" /> : exams.length === 0 ? <div className="small-empty">暂无考试记录 <Button onClick={onStartCreate} icon={<Plus size={16} />}>新建考试</Button></div> : <div className="exam-list">{exams.map((exam) => <button key={exam.id} onClick={() => onOpenExam(exam.id)} className={`exam-list-item ${selectedExam?.id === exam.id ? 'active' : ''}`}>
             <span className="exam-list-copy"><b>{exam.title}</b><small>{dateLabel(exam.exam_date)} · {exam.analysis_job ? homeStatusText(exam.analysis_job.status) : '未分析'}</small></span><i className={`status-dot status-dot-${exam.analysis_job?.status ?? exam.status ?? 'draft'}`} aria-hidden="true" />
           </button>)}</div>}
         </aside>
         <div className="exam-main">
           {creating && <div className="panel create-exam-panel">
-            <div className="section-heading"><h2>新建考试{selectedStudent ? `（${selectedStudent.name}）` : ''}</h2><button className="icon-button" onClick={() => setCreating(false)} aria-label="取消新建"><X size={17} /></button></div>
+            <div className="section-heading"><h2>新建考试{selectedStudent ? `（${selectedStudent.name}）` : ''}</h2><button className="icon-button" onClick={onCancelCreate} aria-label="取消新建"><X size={17} /></button></div>
             <form onSubmit={createExam} className="exam-create-form">
               <Field label="考试名称"><input required maxLength={200} value={examForm.title} onChange={(e) => setExamForm({ ...examForm, title: e.target.value })} placeholder="例如：九月阶段检测" /></Field>
               <div className="three-fields"><Field label="考试日期"><input type="date" value={examForm.exam_date} onChange={(e) => setExamForm({ ...examForm, exam_date: e.target.value })} /></Field><Field label="题目数" hint="按原卷大题题号数填写"><input type="number" min="1" max="200" step="1" required value={examForm.question_count} onChange={(e) => setExamForm({ ...examForm, question_count: e.target.value })} /></Field><Field label="满分（选填）"><input type="number" min="0.5" step="0.5" value={examForm.max_score} onChange={(e) => setExamForm({ ...examForm, max_score: e.target.value })} /></Field></div>
               <div className="two-fields"><Field label="得分（选填）"><input type="number" min="0" step="0.5" value={examForm.total_score} onChange={(e) => setExamForm({ ...examForm, total_score: e.target.value })} /></Field><Field label="班级排名（选填）"><input type="number" min="1" value={examForm.class_rank} onChange={(e) => setExamForm({ ...examForm, class_rank: e.target.value })} /></Field></div>
               <div className="two-fields"><Field label="年级排名（选填）"><input type="number" min="1" value={examForm.grade_rank} onChange={(e) => setExamForm({ ...examForm, grade_rank: e.target.value })} /></Field></div>
-              {!selectedStudentId && <div className="inline-error">请先在左侧选择学生</div>}
-              <div className="form-foot"><Button variant="quiet" onClick={() => setCreating(false)}>取消</Button><Button type="submit" disabled={createBusy || !selectedStudentId} icon={createBusy ? <LoaderCircle className="spin" size={15} /> : <FilePlus2 size={15} />}>{createBusy ? '创建中…' : '创建'}</Button></div>
+              {!selectedStudentId && (students.length ? <div className="inline-error">请先选择学生（在考试列表上方）</div> : <div className="inline-error">还没有学生，请先新增学生。<Button size="sm" onClick={onCreateStudent} icon={<Plus size={14} />}>新增学生</Button></div>)}
+              <div className="form-foot sticky-actions"><Button variant="quiet" onClick={onCancelCreate}>取消</Button><Button type="submit" disabled={createBusy || !selectedStudentId} icon={createBusy ? <LoaderCircle className="spin" size={15} /> : <FilePlus2 size={15} />}>{createBusy ? '创建中…' : '创建'}</Button></div>
             </form>
           </div>}
-          {!selectedExam ? creating || examsLoading ? null : <div className="panel"><EmptyState icon={<ClipboardList />} title={!selectedStudentId ? '未选择学生' : exams.length ? '未选择考试' : '新建考试'} detail={!selectedStudentId ? '先在左侧选择学生。' : exams.length ? '在左侧选择一场考试。' : '点击右上角“新建考试”，填写名称和题目数，再上传试卷和学生作答。'} /></div> : <>
+          {notFound ? <div className="panel"><EmptyState icon={<ClipboardList />} title="找不到这场考试" detail="链接可能已失效，或这场考试属于其他学生或账号。" action={<Button onClick={onCancelCreate}>返回考试列表</Button>} /></div> : !selectedExam ? creating || examsLoading ? null : <div className="panel"><EmptyState icon={<ClipboardList />} title={!selectedStudentId ? '未选择学生' : exams.length ? '未选择考试' : '新建考试'} detail={!selectedStudentId ? '先在左侧选择学生。' : exams.length ? '在左侧选择一场考试。' : '点击右上角“新建考试”，填写名称和题目数，再上传试卷和学生作答。'} /></div> : <>
             <section className="panel exam-summary-card">
               <div className="exam-title-row"><div><h2>{selectedExam.title}</h2><p>{selectedStudent?.name ?? '学生'} · {dateLabel(selectedExam.exam_date)}</p></div><span className={`status-pill status-${activeJob?.status ?? selectedExam.analysis_job?.status ?? 'queued'}`}>{(activeJob ?? selectedExam.analysis_job) ? homeStatusText(activeJob?.status ?? selectedExam.analysis_job?.status) : '未分析'}</span></div>
               <div className="exam-summary-meta"><span>试卷 <b>{assetCount('paper')}</b> 份</span><span>学生作答 <b>{assetCount('response')}</b> 份</span><span>参考答案 <b>{assetCount('reference')}</b> 份</span></div>
@@ -890,16 +1124,12 @@ function ExamView({ students, exams, examsLoading, createRequest, selectedStuden
             <section className="panel upload-panel">
               <div className="section-heading"><h2><span className="step-no">1</span>上传材料</h2></div>
               <p className="section-intro">试卷和学生作答必传，参考答案选传。{missingRequired.length ? <strong className="missing-note">还缺：{missingRequired.join('、')}</strong> : <strong className="ready-note">必需材料已齐</strong>}</p>
-              <div className="upload-role-tabs">{(['paper', 'response', 'reference'] as const).map((role) => <button key={role} className={uploadRole === role ? 'active' : ''} onClick={() => setUploadRole(role)}>{roleIcon(role)}<span>{roleName(role)}</span><small>{selectedExam.assets.filter((asset) => asset.role === role).length}</small></button>)}</div>
-              <div className="upload-dropzone">
-                <input type="file" multiple accept="image/jpeg,image/png,application/pdf" onChange={(e) => { void uploadFiles(e.target.files); e.currentTarget.value = '' }} disabled={uploadBusy} aria-label={`上传${roleName(uploadRole)}`} />
-                <div className="upload-drop-icon">{uploadBusy ? <LoaderCircle className="spin" size={23} /> : <CloudUpload size={24} />}</div>
-                <b>{uploadBusy ? '上传中…' : `上传${roleName(uploadRole)}`}</b>
-                <span>点击选择文件，可多选；按选择顺序排列</span>
-                <small>支持 PDF、JPG、PNG</small>
+              <div className="upload-roles">
+                {(['paper', 'response', 'reference'] as const).map((role) => <UploadRoleCard key={role} role={role} required={role !== 'reference'} assets={sortedAssets.filter((asset) => asset.role === role)} queue={uploadQueue.filter((item) => item.role === role)}
+                  orderBusy={orderBusy} onFiles={(files) => void uploadFiles(files, role)} onRetry={(item) => void uploadOne(item)} onDiscard={(item) => setUploadQueue((queue) => queue.filter((row) => row.key !== item.key))}
+                  onMove={(id, delta) => void moveAsset(id, delta)} onPreview={setPreviewAsset} />)}
               </div>
-              <div className="mobile-capture-row"><span>手机可逐页拍照</span><label className="capture-button"><input type="file" accept="image/*" capture="environment" onChange={(e) => { void uploadFiles(e.target.files); e.currentTarget.value = '' }} disabled={uploadBusy} /><CloudUpload size={16} />拍照上传</label></div>
-              {sortedAssets.length > 0 && <div className="asset-list"><div className="asset-list-title"><b>已上传 {sortedAssets.length} 份</b><small>用上下箭头调整顺序</small></div>{sortedAssets.map((asset, index) => <div className="asset-row" key={asset.id}><span className="asset-ordinal">{String(index + 1).padStart(2, '0')}</span><span className="asset-file-icon">{asset.filename.toLowerCase().endsWith('.pdf') ? <FileText size={17} /> : <FileCheck2 size={17} />}</span><span className="asset-name"><b>{asset.filename}</b><small>{roleName(asset.role)} · {formatBytes(asset.size)}</small></span><div className="asset-controls"><button disabled={index === 0 || orderBusy} onClick={() => void moveAsset(asset.id, -1)} title="上移"><ArrowUp size={15} /></button><button disabled={index === sortedAssets.length - 1 || orderBusy} onClick={() => void moveAsset(asset.id, 1)} title="下移"><ArrowDown size={15} /></button></div></div>)}</div>}
+              {previewAsset && <ModalFrame className="modal-card image-modal" label="页面预览" onClose={() => setPreviewAsset(null)}><div className="section-heading"><h2>{roleName(previewAsset.role)}：{previewAsset.filename}</h2><button className="icon-button" onClick={() => setPreviewAsset(null)} aria-label="关闭"><X size={17} /></button></div><div className="source-image-stage"><img className="asset-preview-image" src={`/api/assets/${encodeURIComponent(previewAsset.id)}/content`} alt={`${roleName(previewAsset.role)}页面`} /></div></ModalFrame>}
             </section>
             <section className="panel analysis-action-panel">
               <div className="section-heading"><h2><span className="step-no">2</span>分析</h2></div>
@@ -911,14 +1141,26 @@ function ExamView({ students, exams, examsLoading, createRequest, selectedStuden
                     <option value="codex">Codex CLI（开发验证）</option>
                   </select>
                 </Field>}
-                <Button onClick={() => void analyze()} disabled={analysisBusy || !curriculum || missingRequired.length > 0} icon={analysisBusy ? <LoaderCircle className="spin" size={16} /> : undefined}>{analysisBusy ? '分析中…' : '开始分析'}</Button>
+                <Button onClick={() => void analyze()} disabled={taskRunning || !curriculum || missingRequired.length > 0} icon={analysisBusy ? <LoaderCircle className="spin" size={16} /> : undefined}>{taskRunning ? '分析中…' : '开始分析'}</Button>
                 {activeJob?.status === 'failed' && <Button variant="secondary" onClick={() => void retry()} disabled={analysisBusy} icon={<RotateCcw size={15} />}>重试</Button>}
               </div>
               {provider === 'codex' && <p className="dev-provider-note">当前使用 Codex CLI 开发验证通道，结果不代表正式模型效果。</p>}
               {activeJob && <JobProgress job={activeJob} />}
+              {jobReadError && activeJob && <div className="inline-error">读取进度失败：{jobReadError}<Button variant="secondary" onClick={() => void updateJob(activeJob.id)}>重新读取进度</Button></div>}
               {analysisLoading && <Loading label="正在加载分析结果…" />}
             </section>
+            <div className="mobile-action-bar">{(() => {
+              const status = activeJob?.status ?? selectedExam.analysis_job?.status
+              if (assetCount('paper') === 0) return <FilePickButton capture accept="image/*" className="button button-primary button-lg" onFiles={(files) => void uploadFiles(files, 'paper')}><Camera size={22} />拍试卷</FilePickButton>
+              if (assetCount('response') === 0) return <FilePickButton capture accept="image/*" className="button button-primary button-lg" onFiles={(files) => void uploadFiles(files, 'response')}><Camera size={22} />拍学生作答</FilePickButton>
+              if (status === 'queued' || status === 'running') return <Button className="button-lg" disabled>分析中，可以先离开，稍后回来查看</Button>
+              if (status === 'partial') return <Button className="button-lg" onClick={() => document.querySelector('.analysis-results')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}>去核对分析结果</Button>
+              if (status === 'completed') return <Button className="button-lg" onClick={() => onPracticeFor(selectedExam)} icon={<BookOpenCheck size={20} />}>用这次考试组卷</Button>
+              if (status === 'failed') return <Button className="button-lg" onClick={() => void retry()} disabled={analysisBusy} icon={<RotateCcw size={20} />}>重试分析</Button>
+              return <Button className="button-lg" onClick={() => void analyze()} disabled={taskRunning || !curriculum}>{taskRunning ? '分析中…' : '材料已齐，开始分析'}</Button>
+            })()}</div>
             {analysisData && <AnalysisPanel
+              onPractice={['completed', 'partial'].includes(activeJob?.status ?? selectedExam.analysis_job?.status ?? '') ? () => onPracticeFor(selectedExam) : undefined}
               data={analysisData} examId={selectedExam.id} curriculum={curriculum} onEdit={openCorrection}
               onSubmitCorrection={submitCorrection} editingResponse={editingResponse}
               setEditingResponse={setEditingResponse} correctionText={correctionText} setCorrectionText={setCorrectionText}
@@ -933,13 +1175,66 @@ function ExamView({ students, exams, examsLoading, createRequest, selectedStuden
   )
 }
 
+type AssetRole = 'paper' | 'response' | 'reference'
+type UploadItem = { key: string; examId: string; file: File; role: AssetRole; status: 'waiting' | 'uploading' | 'failed'; error: string }
+
+const CAPTURE_LABEL: Record<AssetRole, string> = { paper: '拍试卷', response: '拍学生作答', reference: '拍参考答案' }
+// HEIC/WebP are converted to JPEG in the browser when it can decode them (imageUpload.ts); the server accepts JPEG/PNG/PDF.
+const UPLOAD_ACCEPT = 'image/jpeg,image/png,image/heic,image/heif,image/webp,application/pdf'
+
+function FilePickButton({ capture, accept, multiple, className, onFiles, children }: {
+  capture?: boolean; accept: string; multiple?: boolean; className: string; onFiles: (files: FileList | null) => void; children: React.ReactNode
+}) {
+  return <label className={className}>
+    <input type="file" accept={accept} multiple={multiple} capture={capture ? 'environment' : undefined} onChange={(event) => { onFiles(event.target.files); event.currentTarget.value = '' }} />
+    {children}
+  </label>
+}
+
+function UploadRoleCard({ role, required, assets, queue, orderBusy, onFiles, onRetry, onDiscard, onMove, onPreview }: {
+  role: AssetRole; required: boolean; assets: ExamAsset[]; queue: UploadItem[]; orderBusy: boolean
+  onFiles: (files: FileList | null) => void; onRetry: (item: UploadItem) => void; onDiscard: (item: UploadItem) => void
+  onMove: (id: string, delta: number) => void; onPreview: (asset: ExamAsset) => void
+}) {
+  const status = assets.length ? `已传 ${assets.length} 份` : required ? '必传，还没有上传' : '选传'
+  return <div className={`upload-role-card ${required ? '' : 'optional'}`}>
+    <div className="upload-role-head"><b>{roleName(role)}</b><span className={`role-tag ${assets.length ? 'ok' : required ? 'need' : ''}`}>{status}</span></div>
+    <div className="upload-role-actions">
+      <FilePickButton capture accept="image/*" className={`button ${required ? 'button-primary' : 'button-secondary'} button-lg capture-only`} onFiles={onFiles}><Camera size={22} />{CAPTURE_LABEL[role]}</FilePickButton>
+      <FilePickButton multiple accept={UPLOAD_ACCEPT} className="button button-secondary button-lg" onFiles={onFiles}><Images size={20} /><span className="phone-only">从相册或文件选择</span><span className="desktop-only">选择{roleName(role)}文件（可多选）</span></FilePickButton>
+    </div>
+    {(assets.length > 0 || queue.length > 0) && <ol className="page-thumbs">
+      {assets.map((asset, index) => {
+        const isPdf = asset.filename.toLowerCase().endsWith('.pdf')
+        const label = isPdf ? `第 ${index + 1} 份（PDF）` : `第 ${index + 1} 页`
+        const href = `/api/assets/${encodeURIComponent(asset.id)}/content`
+        return <li key={asset.id} className="page-thumb">
+          {isPdf
+            ? <a className="thumb-image thumb-pdf" href={href} target="_blank" rel="noreferrer" aria-label={`打开${label}`}><FileText size={30} /><span>PDF</span></a>
+            : <button type="button" className="thumb-image" onClick={() => onPreview(asset)} aria-label={`查看${label}`}><img src={href} loading="lazy" alt="" /></button>}
+          <span className="thumb-label">{label}</span>
+          <span className="thumb-move">
+            <button type="button" disabled={index === 0 || orderBusy} onClick={() => onMove(asset.id, -1)} aria-label={`${label}上移`}><ArrowUp size={18} /></button>
+            <button type="button" disabled={index === assets.length - 1 || orderBusy} onClick={() => onMove(asset.id, 1)} aria-label={`${label}下移`}><ArrowDown size={18} /></button>
+          </span>
+        </li>
+      })}
+      {queue.map((item) => <li key={item.key} className={`page-thumb upload-${item.status}`}>
+        <span className="thumb-image thumb-pending">{item.status === 'failed' ? <AlertCircle size={28} /> : <LoaderCircle className="spin" size={28} />}</span>
+        <span className="thumb-label">{item.status === 'failed' ? '上传失败' : item.status === 'uploading' ? '上传中…' : '等待上传'}</span>
+        {item.status === 'failed' && <>
+          <small className="thumb-error">{item.error}</small>
+          <span className="thumb-move thumb-retry"><button type="button" onClick={() => onRetry(item)}>重试</button><button type="button" onClick={() => onDiscard(item)}>移除</button></span>
+        </>}
+      </li>)}
+    </ol>}
+  </div>
+}
+
 function roleName(role: 'paper' | 'response' | 'reference') {
   return ({ paper: '试卷', response: '学生作答', reference: '参考答案' })[role]
 }
 
-function roleIcon(role: 'paper' | 'response' | 'reference') {
-  return role === 'paper' ? <FileText size={16} /> : role === 'response' ? <FileCheck2 size={16} /> : <BookOpenCheck size={16} />
-}
 
 function JobProgress({ job }: { job: Job }) {
   const completed = job.status === 'completed' || job.status === 'partial'
@@ -949,8 +1244,8 @@ function JobProgress({ job }: { job: Job }) {
   return <div className={`job-progress job-${job.status}`}><div className="job-icon">{completed ? <CheckCircle2 size={17} /> : job.status === 'failed' ? <CircleHelp size={17} /> : <LoaderCircle className="spin" size={17} />}</div><div className="job-main"><div className="job-title-row"><b>{label}</b></div><div className={`progress-track ${settled ? '' : 'progress-indeterminate'}`}><i style={{ width: `${progress}%` }} /></div>{job.error && <p>{readableJobError(job.error)}</p>}</div></div>
 }
 
-function AnalysisPanel({ data, examId, curriculum, onEdit, onSubmitCorrection, editingResponse, setEditingResponse, correctionText, setCorrectionText, correctionNumber, setCorrectionNumber, correctionPart, setCorrectionPart, correctionBusy }: {
-  data: ExamAnalysisResponse; examId: string; curriculum: Curriculum | null; onEdit: (response: Record<string, any>) => void
+function AnalysisPanel({ onPractice, data, examId, curriculum, onEdit, onSubmitCorrection, editingResponse, setEditingResponse, correctionText, setCorrectionText, correctionNumber, setCorrectionNumber, correctionPart, setCorrectionPart, correctionBusy }: {
+  onPractice?: () => void; data: ExamAnalysisResponse; examId: string; curriculum: Curriculum | null; onEdit: (response: Record<string, any>) => void
   onSubmitCorrection: (event: React.FormEvent) => void; editingResponse: Record<string, any> | null
   setEditingResponse: (value: Record<string, any> | null) => void
   correctionText: string; setCorrectionText: (value: string) => void
@@ -980,7 +1275,7 @@ function AnalysisPanel({ data, examId, curriculum, onEdit, onSubmitCorrection, e
   const warnings = arrayOf<string>(analysis.warnings)
 
   return <section className="analysis-results">
-    <div className="section-heading results-heading"><h2><span className="step-no">3</span>分析结果</h2></div>
+    <div className="section-heading results-heading"><h2><span className="step-no">3</span>分析结果</h2>{onPractice && <Button onClick={onPractice} icon={<BookOpenCheck size={16} />}>用这次考试组卷</Button>}</div>
     <p className="analysis-caution">“错误”只代表本次考试的作答结果，不等于没有掌握。无法确定的内容标为“未确定”或“待核对”，请对照原图。</p>
     {report && Object.keys(report).length > 0 && <TeacherReport report={report} pointNames={pointNames} />}
     <div className="analysis-totals"><span><small>已识别题目</small><b>{questions.length} / {arrayOf<number>(analysis.expected_question_numbers).length || questions.length}</b></span><span><small>逐题得分合计</small><b>{analysis.total_awarded ?? '未确定'} / {analysis.total_maximum ?? '未确定'}</b></span><span><small>考试日期</small><b>{analysis.exam_date ? dateLabel(String(analysis.exam_date)) : '未提供'}</b></span></div>
@@ -1080,15 +1375,27 @@ function feedbackComplete(value: FeedbackDraft) {
   return Boolean(value.expectation) && value.quality !== null && value.saved_minutes !== null && Number.isInteger(value.saved_minutes)
 }
 
+type PracticeDraft = { mode: 'default' | 'advanced'; layout: 'answer_space' | 'compact'; pdfEngine: 'latex' | 'word'; examIds: string[]; quotas: Record<string, QuotaConfig> }
+const draftKey = (studentId: string) => `teassistant:practice-draft:${studentId}`
+function readPracticeDraft(studentId: string): PracticeDraft | null {
+  if (!studentId) return null
+  try { return JSON.parse(window.sessionStorage.getItem(draftKey(studentId)) ?? 'null') as PracticeDraft | null } catch { return null }
+}
+function writePracticeDraft(studentId: string, draft: PracticeDraft) {
+  try { window.sessionStorage.setItem(draftKey(studentId), JSON.stringify(draft)) } catch { /* storage full or disabled: drafts are a convenience only */ }
+}
+
 type QuotaConfig = { selected: boolean; basic: number; intermediate: number; advanced: number }
 
-function PracticeView({ students, selectedStudentId, exams, curriculum, practice, onSelectStudent, onPracticeChange, onError, onNotice }: {
-  students: Student[]; selectedStudentId: string; exams: Exam[]; curriculum: Curriculum | null
+function PracticeView({ students, selectedStudentId, exams, examsLoading, curriculum, practice, onSelectStudent, onPracticeChange, presetExamId, showResult, onShowResult, onShowSettings, onError, onNotice }: {
+  students: Student[]; selectedStudentId: string; exams: Exam[]; examsLoading: boolean; curriculum: Curriculum | null
   practice: Practice | null; onSelectStudent: (id: string) => void
   onPracticeChange: (practice: Practice | null) => void
+  presetExamId?: string; showResult: boolean; onShowResult: () => void; onShowSettings: () => void
   onError: (text: string) => void; onNotice: (kind: Notice['kind'], text: string) => void
 }) {
   const [inventory, setInventory] = useState<InventoryPoint[]>([])
+  const [inventoryFor, setInventoryFor] = useState('')
   const [loading, setLoading] = useState(false)
   const [mode, setMode] = useState<'default' | 'advanced'>('default')
   const [layout, setLayout] = useState<'answer_space' | 'compact'>('answer_space')
@@ -1103,11 +1410,55 @@ function PracticeView({ students, selectedStudentId, exams, curriculum, practice
   const [feedback, setFeedback] = useState<FeedbackDraft>(EMPTY_FEEDBACK)
   const [practiceError, setPracticeError] = useState('')
   const [feedbackBusy, setFeedbackBusy] = useState(false)
+  const practiceStudentRef = useRef(selectedStudentId)
+  const practiceEpochRef = useRef(0)
+  const practiceMountedRef = useRef(false)
+  const practiceControllerRef = useRef<AbortController | null>(null)
+  practiceStudentRef.current = selectedStudentId
+
+  useEffect(() => {
+    ++practiceEpochRef.current
+    practiceMountedRef.current = true
+    setCreating(false)
+    setJob(null)
+    setPracticeHistory([])
+    setFeedback(EMPTY_FEEDBACK)
+    setFeedbackBusy(false)
+    setPracticeError('')
+    return () => {
+      practiceMountedRef.current = false
+      practiceControllerRef.current?.abort()
+    }
+  }, [selectedStudentId])
+
+  const followPractice = useCallback(async (started: { id: string; job_id: string }, studentId: string, epoch: number, controller: AbortController) => {
+    const current = () => practiceMountedRef.current && practiceStudentRef.current === studentId
+      && epoch === practiceEpochRef.current && !controller.signal.aborted
+    if (!current()) return
+    setCreating(true)
+    onPracticeChange(null)
+    try {
+      const finished = await pollJob(started.job_id, (value) => { if (current()) setJob(value) }, controller.signal)
+      if (!current()) return
+      if (finished.status === 'failed') throw new Error(readableJobError(finished.error))
+      const result = unwrap<Practice>(await api<Practice>(`/practices/${encodeURIComponent(started.id)}`, { signal: controller.signal }))
+      if (!current()) return
+      if (result.student_id !== studentId) throw new Error('练习卷所属学生不一致，请重新打开组卷记录')
+      onPracticeChange(result)
+      setFeedback(result.feedback ? feedbackFrom(objectOf(result.feedback)) : EMPTY_FEEDBACK)
+      setPracticeHistory((rows) => [result, ...rows.filter((item) => item.id !== result.id)])
+      onNotice(result.status === 'completed' ? 'success' : 'info', result.status === 'completed' ? '练习卷已生成' : '练习卷已生成，部分考点题量不足')
+    } catch (error) {
+      if (current()) { setPracticeError(messageFor(error)); onError(`组卷未完成：${messageFor(error)}`) }
+    } finally { if (current()) setCreating(false) }
+  }, [onPracticeChange, onNotice, onError])
+
   const selectedStudent = students.find((student) => student.id === selectedStudentId)
   const analyzedExams = exams.filter((exam) => ['completed', 'partial'].includes(exam.analysis_job?.status ?? ''))
 
   useEffect(() => {
     setInventory([])
+    setInventoryFor('')
     if (!selectedStudentId) return
     let active = true
     setLoading(true)
@@ -1116,7 +1467,9 @@ function PracticeView({ students, selectedStudentId, exams, curriculum, practice
         if (!active) return
         const points = arrayOf<InventoryPoint>(result.points)
         setInventory(points)
-        setQuotas(Object.fromEntries(points.map((point) => [point.point_id, { selected: false, basic: 4, intermediate: 4, advanced: 2 }])))
+        const saved = readPracticeDraft(selectedStudentId)?.quotas ?? {}
+        setInventoryFor(selectedStudentId)
+        setQuotas(Object.fromEntries(points.map((point) => [point.point_id, saved[point.point_id] ?? { selected: false, basic: 4, intermediate: 4, advanced: 2 }])))
       })
       .catch((error) => { if (active) onError(`可用题数加载失败：${messageFor(error)}`) })
       .finally(() => { if (active) setLoading(false) })
@@ -1135,11 +1488,18 @@ function PracticeView({ students, selectedStudentId, exams, curriculum, practice
     setPracticeError('')
     api<unknown[]>(`/students/${encodeURIComponent(selectedStudentId)}/practices`)
       .then((rows) => {
-        if (!active) return
+        if (!active || (practiceControllerRef.current && !practiceControllerRef.current.signal.aborted)) return
         const saved = arrayOf<unknown>(rows).map((row) => unwrap<Practice>(row))
         setPracticeHistory(saved)
         const latestPublished = [...saved].reverse().find((item) => ['completed', 'partial'].includes(item.status))
-        const recent = latestPublished ?? saved.at(-1) ?? null
+        const pending = [...saved].reverse().find((item) => ['queued', 'running'].includes(item.status) && item.job_id)
+        const recent = pending ?? latestPublished ?? saved.at(-1) ?? null
+        if (pending?.job_id) {
+          const controller = new AbortController()
+          practiceControllerRef.current = controller
+          void followPractice({ id: pending.id, job_id: pending.job_id }, selectedStudentId, practiceEpochRef.current, controller)
+          return
+        }
         onPracticeChange(recent)
         if (recent?.feedback) {
           const row = objectOf(recent.feedback)
@@ -1151,9 +1511,37 @@ function PracticeView({ students, selectedStudentId, exams, curriculum, practice
       .catch((error) => { if (active) onError(`历史练习加载失败：${messageFor(error)}`) })
       .finally(() => { if (active) setHistoryLoading(false) })
     return () => { active = false }
-  }, [selectedStudentId, onPracticeChange, onError])
+  }, [selectedStudentId, onPracticeChange, onError, followPractice])
 
-  useEffect(() => setExamIds((current) => current.filter((id) => analyzedExams.some((exam) => exam.id === id))), [exams])
+  useEffect(() => { if (!examsLoading) setExamIds((current) => current.filter((id) => analyzedExams.some((exam) => exam.id === id))) }, [examsLoading, exams])
+  // Settings survive switching tabs: restore this student's draft once their exams are loaded, then keep it updated.
+  const draftRestoredFor = useRef('')
+  useEffect(() => {
+    draftRestoredFor.current = ''
+    const draft = readPracticeDraft(selectedStudentId)
+    // Each student has their own settings; without a saved draft, start from the defaults.
+    setMode(draft?.mode ?? 'default'); setLayout(draft?.layout ?? 'answer_space'); setPdfEngine(draft?.pdfEngine ?? 'latex')
+    if (!draft) setExamIds([])
+  }, [selectedStudentId])
+  useEffect(() => {
+    if (!selectedStudentId || draftRestoredFor.current === selectedStudentId || examsLoading) return
+    if (exams.some((exam) => exam.student_id !== selectedStudentId)) return
+    const draft = readPracticeDraft(selectedStudentId)
+    if (draft) setExamIds(draft.examIds.filter((id) => analyzedExams.some((exam) => exam.id === id)))
+    draftRestoredFor.current = selectedStudentId
+  }, [exams, selectedStudentId, examsLoading])
+  useEffect(() => {
+    if (!selectedStudentId || draftRestoredFor.current !== selectedStudentId) return
+    // Until this student's available points are loaded, keep the saved point choices instead of overwriting them.
+    const selected = inventoryFor === selectedStudentId
+      ? Object.fromEntries(Object.entries(quotas).filter(([, quota]) => quota.selected))
+      : readPracticeDraft(selectedStudentId)?.quotas ?? {}
+    writePracticeDraft(selectedStudentId, { mode, layout, pdfEngine, examIds, quotas: selected })
+  }, [selectedStudentId, mode, layout, pdfEngine, examIds, quotas, inventoryFor])
+  // Coming from an exam (“用这次考试组卷”) preselects that exam once it is loaded and analysed.
+  useEffect(() => {
+    if (presetExamId && analyzedExams.some((exam) => exam.id === presetExamId)) setExamIds((current) => current.includes(presetExamId) ? current : [...current, presetExamId])
+  }, [presetExamId, exams])
 
   const selectedPoints = inventory.filter((point) => quotas[point.point_id]?.selected && selectedStudent?.learned_point_ids.includes(point.point_id))
   const requestedTotal = selectedPoints.reduce((sum, point) => {
@@ -1161,7 +1549,18 @@ function PracticeView({ students, selectedStudentId, exams, curriculum, practice
     return sum + (mode === 'default' ? 10 : quota.basic + quota.intermediate + quota.advanced)
   }, 0)
   const visiblePoints = inventory.filter((point) => `${point.name} ${point.point_id}`.toLowerCase().includes(query.toLowerCase()))
-  const canCreate = Boolean(selectedStudent && curriculum && selectedStudent.learned_point_ids.length && examIds.length && selectedPoints.length && !creating)
+  const studentQuery = selectedStudentId ? `?s=${encodeURIComponent(selectedStudentId)}` : ''
+  // Each unmet condition for “生成练习卷”, with a direct link where the teacher can fix it.
+  const missingConditions: { text: string; href?: string }[] = [
+    ...(historyLoading ? [{ text: '正在读取历史练习，请稍候' }] : []),
+    ...(!selectedStudent ? [{ text: '选择学生' }] : []),
+    ...(!curriculum ? [{ text: '考点目录未加载，请刷新页面' }] : []),
+    ...(selectedStudent && selectedStudent.learned_point_ids.length === 0 ? [{ text: '先在学生档案勾选已学考点', href: `#/students/${encodeURIComponent(selectedStudent.id)}` }] : []),
+    ...(selectedStudent && analyzedExams.length === 0 ? [{ text: '先完成一场考试分析', href: `#/exam${studentQuery}` }] : []),
+    ...(selectedStudent && analyzedExams.length > 0 && examIds.length === 0 ? [{ text: '在“1 参考考试”中选一场考试' }] : []),
+    ...(selectedStudent && selectedStudent.learned_point_ids.length > 0 && selectedPoints.length === 0 ? [{ text: '在“2 考点”中至少选一个考点' }] : []),
+  ]
+  const canCreate = Boolean(selectedStudent && curriculum && selectedStudent.learned_point_ids.length && examIds.length && selectedPoints.length && !creating && !historyLoading)
 
   const setQuota = (pointId: string, patchValue: Partial<QuotaConfig>) => setQuotas((current) => ({ ...current, [pointId]: { ...current[pointId], ...patchValue } }))
   const createPractice = async (event: React.FormEvent) => {
@@ -1171,6 +1570,13 @@ function PracticeView({ students, selectedStudentId, exams, curriculum, practice
       const quota = quotas[point.point_id]
       return quota.basic + quota.intermediate + quota.advanced === 0
     })) { onError('每个已选考点的进阶配额合计至少为 1'); return }
+    const studentId = selectedStudentId
+    const epoch = practiceEpochRef.current
+    practiceControllerRef.current?.abort()
+    const controller = new AbortController()
+    practiceControllerRef.current = controller
+    const current = () => practiceMountedRef.current && practiceStudentRef.current === studentId
+      && epoch === practiceEpochRef.current && !controller.signal.aborted
     setCreating(true)
     setPracticeError('')
     onPracticeChange(null)
@@ -1184,38 +1590,38 @@ function PracticeView({ students, selectedStudentId, exams, curriculum, practice
       const started = await api<{ id: string; job_id: string; status: string }>('/practices', {
         method: 'POST', body: JSON.stringify({ student_id: selectedStudentId, exam_ids: examIds, quotas: requestQuotas, seed: 0, layout, pdf_engine: pdfEngine }),
       })
+      if (!current()) return
       onNotice('info', '已提交组卷')
-      const finished = await pollJob(started.job_id, setJob)
-      if (finished.status === 'failed') throw new Error(readableJobError(finished.error))
-      const result = unwrap<Practice>(await api<Practice>(`/practices/${encodeURIComponent(started.id)}`))
-      onPracticeChange(result)
-      setPracticeHistory((rows) => [result, ...rows.filter((item) => item.id !== result.id)])
-      if (result.status === 'completed') onNotice('success', '练习卷已生成')
-      else onNotice('info', '练习卷已生成，部分考点题量不足')
-    } catch (error) { setPracticeError(messageFor(error)); onError(`组卷未完成：${messageFor(error)}`) }
-    finally { setCreating(false) }
+      onShowResult()
+      await followPractice(started, studentId, epoch, controller)
+    } catch (error) { if (current()) { setPracticeError(messageFor(error)); onError(`组卷未完成：${messageFor(error)}`) } }
+    finally { if (current()) setCreating(false) }
   }
 
   const sendFeedback = async (event: React.FormEvent) => {
     event.preventDefault()
-    if (!practice) return
+    if (!practice || practice.student_id !== selectedStudentId) return
+    const studentId = selectedStudentId
+    const epoch = practiceEpochRef.current
+    const current = () => practiceMountedRef.current && practiceStudentRef.current === studentId && epoch === practiceEpochRef.current
     setFeedbackBusy(true)
     try {
       if (!feedbackComplete(feedback)) { onError('请先选择是否符合预期、质量评分并填写节省时间'); return }
       const result = await api<Record<string, any>>(`/practices/${encodeURIComponent(practice.id)}/feedback`, { method: 'POST', body: JSON.stringify(feedback) })
+      if (!current()) return
       onPracticeChange({ ...practice, feedback: result })
       onNotice('success', '反馈已提交')
-    } catch (error) { onError(`反馈未提交：${messageFor(error)}`) }
-    finally { setFeedbackBusy(false) }
+    } catch (error) { if (current()) onError(`反馈未提交：${messageFor(error)}`) }
+    finally { if (current()) setFeedbackBusy(false) }
   }
 
   return <>
     <div className="page-heading"><div><h1>组卷</h1><p>按考点从题库选题，生成学生卷和教师卷。</p></div></div>
-    <div className="builder-layout">
+    <div className={`builder-layout ${showResult ? 'show-result' : 'show-settings'}`}>
       <form id="practice-form" className="builder-panel panel" onSubmit={createPractice}>
         <div className="section-heading"><h2>组卷设置</h2></div>
         <Field label="学生"><select value={selectedStudentId} onChange={(e) => { onSelectStudent(e.target.value); onPracticeChange(null) }}><option value="">请选择学生</option>{students.map((student) => <option key={student.id} value={student.id}>{student.name} · {gradeLabel(student.grade)}</option>)}</select></Field>
-        {!selectedStudent ? <div className="inline-warning"><CircleHelp size={16} /> 请先选择学生。</div> : <>
+        {!selectedStudent ? students.length === 0 ? <div className="inline-warning"><CircleHelp size={16} /><span>还没有学生。先新增学生并勾选已学考点，再组卷。<a className="button button-primary button-md inline-cta" href="#/students/new">新增学生</a></span></div> : <div className="inline-warning"><CircleHelp size={16} /> 请先选择学生。</div> : <>
           <div className="builder-subhead"><div><h3><span className="step-no">1</span>参考考试</h3><p>至少选一场已完成分析的考试，随练习卷一起记录</p></div><span>已选 {examIds.length} 场</span></div>
           <div className="exam-signal-list">{exams.map((exam) => {
             const done = ['completed', 'partial'].includes(exam.analysis_job?.status ?? '')
@@ -1237,14 +1643,16 @@ function PracticeView({ students, selectedStudentId, exams, curriculum, practice
           <div className="builder-subhead"><div><h3><span className="step-no">3</span>题量与版式</h3></div></div>
           <div className="mode-cards"><label className={`mode-card ${mode === 'default' ? 'active' : ''}`}><input type="radio" checked={mode === 'default'} onChange={() => setMode('default')} /><span className="mode-radio" /><b>默认</b><small>每个考点 10 题，优先选中等难度</small></label><label className={`mode-card ${mode === 'advanced' ? 'active' : ''}`}><input type="radio" checked={mode === 'advanced'} onChange={() => setMode('advanced')} /><span className="mode-radio" /><b>按难度设置</b><small>每个考点分别设基础、提高、挑战题数</small></label></div>
           <div className="layout-choice"><span>学生卷版式</span><label><input type="radio" checked={layout === 'answer_space'} onChange={() => setLayout('answer_space')} /> 作答版</label><label><input type="radio" checked={layout === 'compact'} onChange={() => setLayout('compact')} /> 紧凑版</label></div>
-          <Field label="PDF 排版方式" hint="排版不理想时可换一种方式重新生成。"><select value={pdfEngine} onChange={(e) => setPdfEngine(e.target.value as 'latex' | 'word')}><option value="latex">LaTeX 排版</option><option value="word">Word 模板转换</option></select></Field>
+          <details className="more-settings"><summary>更多设置（PDF 排版方式）</summary><Field label="PDF 排版方式" hint="默认即可。排版不理想时可换另一种方式重新生成。"><select value={pdfEngine} onChange={(e) => setPdfEngine(e.target.value as 'latex' | 'word')}><option value="latex">公式统一排版（LaTeX）</option><option value="word">按 Word 模板转换</option></select></Field></details>
           {selectedPoints.length > 0 && <div className="quota-summary"><span>计划题量</span><b>{requestedTotal}<small> 题</small></b><span>{selectedPoints.length} 个考点</span></div>}
           <p className="progress-note">只选用考点及前置考点都已学的题。某考点题数不够时会列出缺口，不用超纲题补足。</p>
-          <Button type="submit" disabled={!canCreate} className="full-width builder-submit" icon={creating ? <LoaderCircle className="spin" size={16} /> : undefined}>{creating ? '组卷中…' : '生成练习卷'}</Button>
-          {selectedStudent.learned_point_ids.length === 0 && <p className="inline-error">该学生还没有勾选已学考点，请先到“学生档案”勾选。</p>}
+          <div className="sticky-actions practice-submit">
+            {!creating && missingConditions.length > 0 && <p className="missing-conditions"><AlertCircle size={16} /><span>还差：{missingConditions.map((item, index) => <React.Fragment key={item.text}>{index > 0 && '；'}{item.href ? <a href={item.href}>{item.text}</a> : item.text}</React.Fragment>)}</span></p>}
+            <Button type="submit" disabled={!canCreate} className="full-width builder-submit button-lg" icon={creating ? <LoaderCircle className="spin" size={18} /> : undefined}>{creating ? '组卷中…' : '生成练习卷'}</Button>
+          </div>
         </>}
       </form>
-      <section className="panel preview-panel"><div className="section-heading"><h2>练习卷</h2></div>
+      <section className="panel preview-panel"><div className="section-heading"><h2>练习卷</h2>{showResult && <button type="button" className="text-action phone-only" onClick={onShowSettings}>修改设置</button>}</div>
         {practice && practiceHistory.length > 1 && <label className="practice-history-select"><span>历史练习</span><select value={practice.id} onChange={(event) => {
           const selected = practiceHistory.find((item) => item.id === event.target.value)
           if (!selected) return
@@ -1252,7 +1660,7 @@ function PracticeView({ students, selectedStudentId, exams, curriculum, practice
           const row = objectOf(selected.feedback)
           setFeedback(selected.feedback ? feedbackFrom(row) : EMPTY_FEEDBACK)
         }}>{practiceHistory.map((item, index) => <option key={item.id} value={item.id}>第 {index + 1} 份（{statusText(item.status)}）</option>)}</select></label>}
-        {!practice ? historyLoading ? <Loading label="正在加载最近的练习…" /> : creating && job ? <><JobProgress job={job} /><div className="preview-processing"><div className="processing-orbit"><LoaderCircle className="spin" size={34} /></div><b>正在组卷</b><p>完成后在这里显示题目、题量缺口和下载文件。</p></div></> : practiceError ? <div className="practice-failed"><AlertCircle size={18} /><div><b>组卷失败</b><p>{practiceError}</p><button type="submit" form="practice-form" className="button button-secondary button-sm" disabled={!canCreate}>按当前设置重新生成</button></div></div> : <EmptyState icon={<BookOpenCheck />} title="还没有练习卷" detail="完成左侧设置后点击“生成练习卷”。" /> : <PracticeResult practice={practice} pointNames={new Map((curriculum?.points ?? []).map((point) => [point.id, point.name]))} feedback={feedback} onFeedbackChange={(patchValue) => setFeedback((current) => ({ ...current, ...patchValue }))} onSubmit={sendFeedback} feedbackBusy={feedbackBusy} />}
+        {!practice ? historyLoading ? <Loading label="正在加载最近的练习…" /> : creating && job ? <><JobProgress job={job} /><div className="preview-processing"><div className="processing-orbit"><LoaderCircle className="spin" size={34} /></div><b>正在组卷</b><p>完成后在这里显示题目、题量缺口和下载文件。</p></div></> : practiceError ? <div className="practice-failed"><AlertCircle size={18} /><div><b>组卷失败</b><p>{practiceError}</p><button type="submit" form="practice-form" className="button button-secondary button-sm" disabled={!canCreate}>按当前设置重新生成</button></div></div> : <EmptyState icon={<BookOpenCheck />} title="还没有练习卷" detail="完成组卷设置后点击“生成练习卷”。" action={showResult ? <Button onClick={onShowSettings}>去组卷设置</Button> : undefined} /> : <PracticeResult practice={practice} pointNames={new Map((curriculum?.points ?? []).map((point) => [point.id, point.name]))} feedback={feedback} onFeedbackChange={(patchValue) => setFeedback((current) => ({ ...current, ...patchValue }))} onSubmit={sendFeedback} feedbackBusy={feedbackBusy} />}
       </section>
     </div>
   </>
@@ -1272,11 +1680,22 @@ function PracticeResult({ practice, pointNames, feedback, onFeedbackChange, onSu
   const setReason = (reason: string) => onFeedbackChange({ reasons: feedback.reasons.includes(reason) ? feedback.reasons.filter((item) => item !== reason) : [...feedback.reasons, reason] })
   return <div className="practice-result">
     <div className="result-state-row"><span className={`status-pill status-${practice.status}`}>{statusText(practice.status)}</span></div>
+    {files.length > 0 && <div className="download-hero">{[...files].sort((a, b) => Number(isPdfFile(b)) - Number(isPdfFile(a))).map((file, index) => {
+      const href = safeApiHref(String(file.url ?? ''))
+      const pdf = isPdfFile(file)
+      const label = String(file.label ?? '导出文件')
+      return href
+        ? <a key={String(file.id ?? index)} href={href} className={`button ${pdf ? 'button-primary' : 'button-secondary'} ${pdf ? 'button-lg' : 'button-md'} download-button`}><Download size={pdf ? 22 : 18} /><span>下载{label}</span></a>
+        : <div key={String(file.id ?? index)} className="download-missing"><AlertCircle size={16} /> {label}暂时无法下载，请重新生成</div>
+    })}</div>}
     {(warnings.length > 0 || shortfalls.length > 0) && <div className="shortfall-box"><b><AlertCircle size={15} /> 需要注意</b>{warnings.map((warning, index) => <p key={`w-${index}`}>{warning}</p>)}{shortfalls.map((item, index) => <p key={`s-${index}`}>{pointNames.get(String(item.point_id)) ?? String(item.point_id)} · {item.difficulty ? `${difficultyLabel(String(item.difficulty))} ` : ''}需要 {String(item.requested)} 题，只选到 {String(item.selected)} 题</p>)}</div>}
-    {files.length > 0 && <div className="export-downloads"><b>下载文件</b>{files.map((file, index) => { const href = safeApiHref(String(file.url ?? '')); return href ? <a key={String(file.id ?? index)} href={href} className="download-link"><Download size={16} /><span>{String(file.label ?? '导出文件')}</span></a> : <div key={String(file.id ?? index)} className="download-missing"><AlertCircle size={15} /> {String(file.label ?? '文件')}暂时无法下载，请重新生成</div> })}</div>}
     {items.length > 0 ? <div className="preview-items"><div className="preview-items-title"><b>题目</b><span>{items.length} 道</span></div>{items.map((item, index) => <div className="preview-item" key={`${item.question_id}-${index}`}><div className="preview-item-head"><span>{String(item.order ?? index + 1).padStart(2, '0')}</span><b>{String(item.point_name ?? item.target_point_id ?? '考点')}</b><small>{difficultyLabel(String(item.difficulty ?? ''))}</small></div><div className="preview-content-box"><SanitizedPreview html={String(item.question_html ?? '')} /><details><summary>答案与解析</summary><SanitizedPreview html={String(item.answer_html ?? '')} /></details></div></div>)}</div> : snapshotItems.length > 0 ? <div className="preview-items"><div className="preview-items-title"><b>题目</b><span>{snapshotItems.length} 道</span></div>{snapshotItems.map((item, index) => <QuestionContent key={String(item.order ?? index)} item={item} index={index} />)}</div> : <EmptyState icon={<FileCheck2 />} title="没有选到题目" detail="请查看上方的题量缺口和提示。" />}
     <form className="feedback-form" onSubmit={onSubmit}><div className="feedback-heading"><div><b>这份练习卷符合预期吗？</b></div></div><div className="feedback-choice">{[['yes', '符合'], ['partial', '部分符合'], ['no', '不符合']].map(([value, label]) => <label key={value} className={feedback.expectation === value ? 'selected' : ''}><input type="radio" name="feedback-expectation" checked={feedback.expectation === value} onChange={() => onFeedbackChange({ expectation: value })} />{label}</label>)}</div><div className="field"><span className="field-label">质量评分（1 最低，5 最高）</span><div className="feedback-choice">{[1, 2, 3, 4, 5].map((value) => <label key={value} className={feedback.quality === value ? 'selected' : ''}><input type="radio" name="feedback-quality" checked={feedback.quality === value} onChange={() => onFeedbackChange({ quality: value })} />{value}</label>)}</div></div><Field label="节省备课时间（分钟）" hint="与自己备同样一份练习相比；多花了时间填负数"><input type="number" min="-600" max="600" required value={feedback.saved_minutes ?? ''} onChange={(e) => onFeedbackChange({ saved_minutes: e.target.value === '' ? null : Number(e.target.value) })} /></Field><div className="reason-options">{reasons.map((reason) => <label key={reason} className={feedback.reasons.includes(reason) ? 'selected' : ''}><input type="checkbox" checked={feedback.reasons.includes(reason)} onChange={() => setReason(reason)} />{reason}</label>)}</div><Field label="补充说明（选填）"><textarea rows={3} maxLength={2000} value={feedback.comment} onChange={(e) => onFeedbackChange({ comment: e.target.value })} placeholder="例如：第 3 题超纲、答案有误" /></Field><Button type="submit" size="sm" disabled={feedbackBusy || !feedbackComplete(feedback)} icon={feedbackBusy ? <LoaderCircle className="spin" size={14} /> : undefined}>{feedbackBusy ? '提交中…' : '提交反馈'}</Button></form>
   </div>
+}
+
+function isPdfFile(file: Record<string, any>) {
+  return /pdf/i.test(String(file.label ?? '')) || /\.pdf$|_pdf$/i.test(String(file.url ?? ''))
 }
 
 function difficultyLabel(value: string) { return ({ basic: '基础', intermediate: '提高', advanced: '挑战' } as Record<string, string>)[value] ?? '难度未确认' }
