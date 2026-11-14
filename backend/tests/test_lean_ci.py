@@ -31,9 +31,10 @@ def test_full_worker_and_lean_api_are_used_in_the_mixed_container_smoke():
         ("publish-platform", "teassistant-release", "teassistant-api-release"),
     ):
         job = _job(job_name)
+        assert "target: worker" in job
         assert f"IMAGE_TAG: {full_tag}:${{{{ github.sha }}}}-${{{{ matrix.arch }}}}" in job
         assert f"API_IMAGE_TAG: {api_tag}:${{{{ github.sha }}}}-${{{{ matrix.arch }}}}" in job
-        assert "container_smoke.py --image \"$IMAGE_TAG\" --api-image \"$API_IMAGE_TAG\"" in job
+        assert "container_smoke.py --image \"$IMAGE_TAG\" --api-image \"$API_IMAGE_TAG\" --tools-image \"$TOOLS_IMAGE_TAG\"" in job
 
 
 def test_publish_keeps_credentials_out_of_build_and_smoke_and_logs_in_after_gates():
@@ -41,10 +42,32 @@ def test_publish_keeps_credentials_out_of_build_and_smoke_and_logs_in_after_gate
     login = job.index("Log in to GHCR after checks and smoke passed")
     assert job.index("Repeat isolated synthetic smoke before registry login") < login
     assert job.index("Enforce trusted lean API image size before registry login") < login
-    assert "GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}" in job
-    build_and_smoke = job[:login]
-    assert "secrets." not in build_and_smoke
+    reuse_start = job.index("Resolve immutable tools image and reuse it when already published")
+    reuse_end = job.index("Build tools image only for a missing content reference", reuse_start)
+    reuse = job[reuse_start:reuse_end]
+    assert "GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}" in reuse
+    assert 'export DOCKER_CONFIG="$docker_config"' in reuse
+    assert 'trap \'rm -rf "$docker_config"\' EXIT' in reuse
+    pre_reuse = job[:reuse_start]
+    assert "secrets." not in pre_reuse
+    smoke_start = job.index("Repeat isolated synthetic smoke before registry login")
+    smoke_end = job.index("Enforce trusted lean API image size before registry login")
+    assert "secrets." not in job[smoke_start:smoke_end]
     assert "DEEPSEEK_API_KEY" not in job
+
+
+def test_fork_pr_skips_private_tools_registry_and_builds_local_gate_image():
+    job = _job("image")
+    resolve = job[
+        job.index("Resolve immutable tools image and reuse it when already published") :
+        job.index("Build tools image only for a missing content reference")
+    ]
+    assert "PR_HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}" in resolve
+    assert '"$CURRENT_REPOSITORY" != "$PR_HEAD_REPOSITORY"' in resolve
+    assert "Fork PR has no private registry read access" in resolve
+    assert resolve.index("Fork PR has no private registry read access") < resolve.index(
+        'docker manifest inspect "$ref"'
+    )
 
 
 def test_release_preserves_full_tags_and_stages_api_separately_with_manifest_gates():

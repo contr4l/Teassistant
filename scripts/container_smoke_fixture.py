@@ -17,6 +17,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def _tools_enabled() -> bool:
+    from app.tool_client import tools_enabled
+
+    return tools_enabled()
+
+
 def _run(command: list[str], *, cwd: Path, timeout: int) -> str:
     result = subprocess.run(
         command,
@@ -95,14 +101,19 @@ def export_word(output: Path) -> dict[str, object]:
     if output.exists():
         raise ValueError("smoke output must be new")
     output.parent.mkdir(parents=True, exist_ok=True)
-    import pypandoc
+    if _tools_enabled():
+        # export_demo validates these configured values, then its exporter delegates remotely.
+        soffice = "soffice"
+        pandoc = "pandoc"
+    else:
+        import pypandoc
 
-    soffice = (
-        os.environ.get("TEASSISTANT_SOFFICE")
-        or shutil.which("libreoffice")
-        or shutil.which("soffice")
-    )
-    pandoc = pypandoc.get_pandoc_path()
+        soffice = (
+            os.environ.get("TEASSISTANT_SOFFICE")
+            or shutil.which("libreoffice")
+            or shutil.which("soffice")
+        )
+        pandoc = pypandoc.get_pandoc_path()
     command = [
         sys.executable,
         str(ROOT / "scripts" / "export_demo.py"),
@@ -150,25 +161,30 @@ def export_latex(output: Path) -> dict[str, object]:
 """,
         encoding="utf-8",
     )
-    xelatex = shutil.which("xelatex")
-    if not xelatex:
-        raise RuntimeError("XeLaTeX is unavailable in the image")
-    log = ""
-    for _ in range(2):
-        log = _run(
-            [
-                xelatex,
-                "-no-shell-escape",
-                "-interaction=nonstopmode",
-                "-halt-on-error",
-                "-file-line-error",
-                tex.name,
-            ],
-            cwd=output,
-            timeout=90,
-        )
-    if re.search(r"Missing character:|Overfull \\hbox", log):
-        raise RuntimeError("XeLaTeX smoke reported missing glyphs or overfull lines")
+    if _tools_enabled():
+        from app.latex_exporting import _compile_pdf
+
+        _compile_pdf(tex, output, "xelatex")
+    else:
+        xelatex = shutil.which("xelatex")
+        if not xelatex:
+            raise RuntimeError("XeLaTeX is unavailable in the image")
+        log = ""
+        for _ in range(2):
+            log = _run(
+                [
+                    xelatex,
+                    "-no-shell-escape",
+                    "-interaction=nonstopmode",
+                    "-halt-on-error",
+                    "-file-line-error",
+                    tex.name,
+                ],
+                cwd=output,
+                timeout=90,
+            )
+        if re.search(r"Missing character:|Overfull \\hbox", log):
+            raise RuntimeError("XeLaTeX smoke reported missing glyphs or overfull lines")
     pdf = output / "synthetic.pdf"
     if not pdf.is_file() or not pdf.read_bytes().startswith(b"%PDF-"):
         raise RuntimeError("XeLaTeX smoke did not produce a valid PDF")
@@ -187,11 +203,14 @@ def export_latex(output: Path) -> dict[str, object]:
 
 def render_chromium(output: Path) -> dict[str, object]:
     from PIL import Image
-    from playwright.sync_api import sync_playwright
 
-    executable = os.getenv("TEASSISTANT_CHROMIUM") or shutil.which("chromium")
-    if not executable:
-        raise RuntimeError("Chromium executable is unavailable")
+    remote = _tools_enabled()
+    if not remote:
+        from playwright.sync_api import sync_playwright
+
+        executable = os.getenv("TEASSISTANT_CHROMIUM") or shutil.which("chromium")
+        if not executable:
+            raise RuntimeError("Chromium executable is unavailable")
     output.mkdir(parents=True, exist_ok=False)
     geometry = output / "synthetic-geometry.png"
     _make_geometry_png(geometry)
@@ -204,22 +223,40 @@ def render_chromium(output: Path) -> dict[str, object]:
         f'<img src="data:image/png;base64,{embedded}" alt="合成几何图"></main>'
     )
     screenshot = output / "synthetic-page.png"
-    with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=True, executable_path=executable)
+    if remote:
+        from app.tool_client import ToolClientError, render_screenshot
+
+        if markup.count("<math ") != 1 or "data:image/png;base64," not in markup:
+            raise RuntimeError("synthetic HTML lacks expected mathematics or image")
         try:
-            page = browser.new_page(viewport={"width": 1100, "height": 800})
-            page.route("**/*", lambda route: route.abort())
-            page.set_content(markup, wait_until="load", timeout=30000)
-            page.evaluate("() => document.fonts.ready.then(() => true)")
-            if page.locator("math").count() != 1 or not page.locator("img").evaluate(
-                "img => img.complete && img.naturalWidth > 0"
-            ):
-                raise RuntimeError("Chromium synthetic mathematics or image failed to render")
-            page.screenshot(path=str(screenshot), full_page=True, timeout=30000)
-        finally:
-            browser.close()
-    with Image.open(screenshot) as image:
-        image.verify()
+            png, width, height = render_screenshot(markup)
+        except ToolClientError as exc:
+            raise RuntimeError(f"remote Chromium screenshot failed: {exc}") from exc
+        screenshot.write_bytes(png)
+        try:
+            with Image.open(screenshot) as image:
+                image.load()
+                if image.format != "PNG" or image.size != (width, height):
+                    raise RuntimeError("remote Chromium screenshot dimensions are invalid")
+        except (OSError, Image.DecompressionBombError) as exc:
+            raise RuntimeError("remote Chromium screenshot is not a valid PNG") from exc
+    else:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True, executable_path=executable)
+            try:
+                page = browser.new_page(viewport={"width": 1100, "height": 800})
+                page.route("**/*", lambda route: route.abort())
+                page.set_content(markup, wait_until="load", timeout=30000)
+                page.evaluate("() => document.fonts.ready.then(() => true)")
+                if page.locator("math").count() != 1 or not page.locator("img").evaluate(
+                    "img => img.complete && img.naturalWidth > 0"
+                ):
+                    raise RuntimeError("Chromium synthetic mathematics or image failed to render")
+                page.screenshot(path=str(screenshot), full_page=True, timeout=30000)
+            finally:
+                browser.close()
+        with Image.open(screenshot) as image:
+            image.verify()
     return {"synthetic": True, "screenshot_bytes": screenshot.stat().st_size,
             "math_elements": 1, "external_network": False}
 

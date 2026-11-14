@@ -30,6 +30,7 @@ from app.contracts import (
     Subquestion,
 )
 from app.practice import validate_current_progress
+from app.tool_client import ToolClientError, convert_pandoc, convert_word_pdf, tools_enabled
 
 _M_NS = "http://schemas.openxmlformats.org/officeDocument/2006/math"
 _W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
@@ -117,26 +118,34 @@ def _pandoc_formula(
     target = workdir / f"formula-{len(cache)}.docx"
     # Raw HTML is disabled; text nodes never pass through Pandoc at all.
     source.write_text(f"$${latex}$$\n", encoding="utf-8")
-    try:
-        completed = subprocess.run(
-            [
-                pandoc,
-                "--from=markdown+tex_math_dollars-raw_html",
-                "--to=docx",
-                "--output",
-                str(target),
-                str(source),
-            ],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        raise ExportError(f"Pandoc formula conversion failed: {exc}") from exc
-    if completed.returncode != 0 or completed.stderr.strip():
-        detail = completed.stderr.strip()[-1000:]
-        reason = "reported a warning" if completed.returncode == 0 else "could not convert"
+    if tools_enabled():
+        try:
+            response = convert_pandoc(source, target)
+        except ToolClientError as exc:
+            raise ExportError(f"Pandoc formula conversion failed: {exc}") from exc
+        returncode, stderr = response["returncode"], response["stderr"]
+    else:
+        try:
+            completed = subprocess.run(
+                [
+                    pandoc,
+                    "--from=markdown+tex_math_dollars-raw_html",
+                    "--to=docx",
+                    "--output",
+                    str(target),
+                    str(source),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise ExportError(f"Pandoc formula conversion failed: {exc}") from exc
+        returncode, stderr = completed.returncode, completed.stderr
+    if returncode != 0 or stderr.strip():
+        detail = stderr.strip()[-1000:]
+        reason = "reported a warning" if returncode == 0 else "could not convert"
         raise ExportError(f"Pandoc {reason} formula {latex!r}: {detail}")
     try:
         with zipfile.ZipFile(target) as archive:
@@ -299,27 +308,38 @@ def _write_teacher(
 def _convert_pdf(docx: Path, output_dir: Path, soffice: str, profile_dir: Path) -> Path:
     profile_dir.mkdir(parents=True, exist_ok=False)
     target = output_dir / f"{docx.stem}.pdf"
-    try:
-        completed = subprocess.run(
-            [
-                soffice,
-                f"-env:UserInstallation={profile_dir.as_uri()}",
-                "--headless",
-                "--convert-to",
-                "pdf",
-                "--outdir",
-                str(output_dir),
-                str(docx),
-            ],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=90,
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        raise ExportError(f"LibreOffice conversion failed for {docx.name}: {exc}") from exc
-    if completed.returncode != 0 or not target.is_file() or target.stat().st_size < 5:
-        detail = completed.stderr.strip()[-1000:]
+    if tools_enabled():
+        try:
+            completed = convert_word_pdf(docx, output_dir, profile_dir)
+        except ToolClientError as exc:
+            raise ExportError(f"LibreOffice conversion failed for {docx.name}: {exc}") from exc
+    else:
+        try:
+            local = subprocess.run(
+                [
+                    soffice,
+                    f"-env:UserInstallation={profile_dir.as_uri()}",
+                    "--headless",
+                    "--convert-to",
+                    "pdf",
+                    "--outdir",
+                    str(output_dir),
+                    str(docx),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=90,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise ExportError(f"LibreOffice conversion failed for {docx.name}: {exc}") from exc
+        completed = {
+            "returncode": local.returncode,
+            "stdout": local.stdout,
+            "stderr": local.stderr,
+        }
+    if completed["returncode"] != 0 or not target.is_file() or target.stat().st_size < 5:
+        detail = completed["stderr"].strip()[-1000:]
         raise ExportError(f"LibreOffice did not produce {target.name}: {detail}")
     with target.open("rb") as pdf_file:
         if pdf_file.read(5) != b"%PDF-":
@@ -356,12 +376,12 @@ def export_snapshot(
     final_dir = Path(output_dir).absolute()
     if final_dir.exists() or final_dir.is_symlink():
         raise ExportError(f"export destination already exists: {final_dir}")
-    pandoc = (
+    pandoc = "pandoc" if tools_enabled() else (
         _available_executable(pandoc_executable)
         if pandoc_executable is not None
         else shutil.which("pandoc")
     )
-    soffice = (
+    soffice = "soffice" if tools_enabled() else (
         _available_executable(soffice_executable)
         if soffice_executable is not None
         else shutil.which("soffice")

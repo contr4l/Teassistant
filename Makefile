@@ -1,10 +1,10 @@
-.PHONY: setup check setup-web check-web schemas selection evaluate deploy-init deploy-check docker-build docker-pull docker-up docker-status
+.PHONY: setup check setup-web check-web schemas selection evaluate deploy-init deploy-check docker-build docker-build-tools docker-pull docker-up docker-status
 
 setup:
 	UV_CACHE_DIR="$(CURDIR)/.cache/uv" uv sync --locked --group export
 
 check:
-	.venv/bin/ruff check backend scripts
+	.venv/bin/ruff check backend scripts tools
 	.venv/bin/pytest -q
 
 setup-web:
@@ -31,6 +31,9 @@ deploy-check:
 
 docker-build:
 	python3 scripts/deploy.py build
+
+docker-build-tools:
+	python3 scripts/deploy.py build-tools
 
 docker-pull:
 	python3 scripts/deploy.py pull

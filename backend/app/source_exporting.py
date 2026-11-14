@@ -43,6 +43,7 @@ from app.print_layout import (
     style_source_table,
 )
 from app.semantic_bank import canonical_hash
+from app.tool_client import tools_enabled
 
 W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 M = "http://schemas.openxmlformats.org/officeDocument/2006/math"
@@ -1645,7 +1646,7 @@ def export_bank_snapshot(
             raise ExportError("snapshot source structure or answer association is not confirmed")
         if payload.get("answer_available") is not True:
             raise ExportError("teacher export requires an existing answer")
-    soffice = (
+    soffice = "soffice" if tools_enabled() else (
         _available_executable(soffice_executable)
         if soffice_executable is not None
         else shutil.which("soffice")

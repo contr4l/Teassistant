@@ -97,12 +97,17 @@ def _validate_image(image: str) -> str:
 
 
 def _compose_text(
-    image: str, share: Path, db_password: str, api_image: str | None = None
+    image: str,
+    share: Path,
+    db_password: str,
+    api_image: str | None = None,
+    tools_image: str | None = None,
 ) -> str:
     worker_image_yaml = json.dumps(image)
     api_image_yaml = json.dumps(image if api_image is None else api_image)
     # Keep the argument for callers; container-owned outputs stay in named volumes.
     password_yaml = json.dumps(db_password)
+    tools_dependency = ""
     app_env = """      TEASSISTANT_DATABASE_URL: postgresql+psycopg://smoke:{db}@postgres:5432/smoke
       TEASSISTANT_DATA_DIR: /app/work/private
       TEASSISTANT_CURRICULUM: /app/data/curricula/junior-math-2022-draft-v2.json
@@ -111,7 +116,24 @@ def _compose_text(
       DEEPSEEK_API_KEY: ""
       TEASSISTANT_ALLOW_CODEX: "0"
       TEASSISTANT_SECURE_COOKIES: "0"
+      TMPDIR: /app/work/tmp
 """.replace("{db}", db_password)
+    tools_service = ""
+    if tools_image is not None:
+        tools_dependency = "      tools:\n        condition: service_healthy\n"
+        app_env += "      TEASSISTANT_TOOLS_URL: http://tools:8001\n"
+        tools_service = f'''  tools:
+    image: {json.dumps(tools_image)}
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=3).read()"]
+      interval: 2s
+      timeout: 4s
+      retries: 30
+    environment:
+      TOOL_WORK_ROOT: /app/work
+    volumes:
+      - smoke_data:/app/work
+'''
     return f"""services:
   postgres:
     image: postgres:17-bookworm
@@ -163,8 +185,8 @@ def _compose_text(
     depends_on:
       init:
         condition: service_completed_successfully
-    command: [/app/.venv/bin/python, /app/scripts/run_web_worker.py]
-volumes:
+{tools_dependency}    command: [/app/.venv/bin/python, /app/scripts/run_web_worker.py]
+{tools_service}volumes:
   smoke_db:
   smoke_data:
 networks:
@@ -658,10 +680,13 @@ def run_smoke(
     timeout_seconds: int = 240,
     report_path: Path | None = None,
     api_image: str | None = None,
+    tools_image: str | None = None,
 ) -> dict[str, Any]:
     image = _validate_image(image)
     if api_image is not None:
         api_image = _validate_image(api_image)
+    if tools_image is not None:
+        tools_image = _validate_image(tools_image)
     if report_path is not None and (report_path.exists() or report_path.is_symlink()):
         raise ValueError("smoke report path must be new")
     docker = (
@@ -682,6 +707,14 @@ def run_smoke(
         ).strip()
         if not platform or api_platform != platform:
             raise ValueError("API and worker images must target the same platform")
+    if tools_image is not None:
+        tools_platform = _at_stage(
+            "tools image inspection", _run,
+            [docker, "image", "inspect", "--format", "{{.Os}}/{{.Architecture}}", tools_image],
+            timeout=30,
+        ).strip()
+        if not platform or tools_platform != platform:
+            raise ValueError("tools and business worker images must target the same platform")
     project = "ta-smoke-" + secrets.token_hex(5)
     with tempfile.TemporaryDirectory(prefix="teassistant-container-smoke-") as temp_text:
         temp = Path(temp_text)
@@ -689,7 +722,9 @@ def run_smoke(
         db_password = secrets.token_urlsafe(24)
         compose_file = temp / "compose.yaml"
         compose_file.write_text(
-            _compose_text(image, share, db_password, api_image=api_image), encoding="utf-8"
+            _compose_text(
+                image, share, db_password, api_image=api_image, tools_image=tools_image
+            ), encoding="utf-8"
         )
         compose_file.chmod(0o600)
         compose = [docker, "compose", "--project-name", project, "--file", str(compose_file)]
@@ -697,6 +732,7 @@ def run_smoke(
             "schema_version": "container-smoke-v1",
             "image": image,
             "api_image": api_image or image,
+            "tools_image": tools_image,
             "platform": platform,
             "model_credentials": "none",
         }
@@ -704,7 +740,8 @@ def run_smoke(
             _at_stage("database initialization", _run,
                       compose + ["run", "--rm", "-T", "init"], timeout=60)
             _at_stage("service startup", _run,
-                      compose + ["up", "--detach", "--wait", "postgres", "api", "worker"],
+                      compose + ["up", "--detach", "--wait", "postgres", "api", "worker"]
+                      + (["tools"] if tools_image is not None else []),
                       timeout=120)
             result["web_workflow"] = _at_stage("web workflow", _api_smoke, compose, timeout_seconds)
             chromium = _at_stage(
@@ -777,6 +814,7 @@ def main(argv: list[str] | None = None) -> int:
         "--api-image",
         help="optional already-built lean API/init image; worker keeps using --image",
     )
+    parser.add_argument("--tools-image", help="optional separately built tools-service image")
     parser.add_argument("--docker-executable", default="docker")
     parser.add_argument("--timeout-seconds", type=int, default=240)
     parser.add_argument("--report", type=Path)
@@ -790,6 +828,7 @@ def main(argv: list[str] | None = None) -> int:
             timeout_seconds=args.timeout_seconds,
             report_path=args.report,
             api_image=args.api_image,
+            tools_image=args.tools_image,
         )
     except SmokeStageError as exc:
         print(f"container smoke failed: {exc.summary}", file=sys.stderr)

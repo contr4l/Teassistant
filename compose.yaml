@@ -6,7 +6,7 @@ x-application: &application
     context: .
     target: runtime
   restart: unless-stopped
-  environment:
+  environment: &application-environment
     TEASSISTANT_DATABASE_URL: postgresql+psycopg://teassistant:${TEASSISTANT_DB_PASSWORD:?Run python3 scripts/deploy.py init first}@postgres:5432/teassistant
     TEASSISTANT_DATA_DIR: /app/work/web/private
     TEASSISTANT_FRONTEND_DIST: /app/frontend/dist
@@ -87,6 +87,15 @@ services:
 
   worker:
     <<: *application
+    build:
+      context: .
+      target: ${TEASSISTANT_WORKER_TARGET:-runtime}
+    environment:
+      <<: *application-environment
+      TEASSISTANT_TOOLS_URL: http://tools:8001
+    networks:
+      - default
+      - tool-net
     command: [/app/.venv/bin/python, /app/scripts/run_web_worker.py]
     stop_grace_period: 90s
     healthcheck:
@@ -98,7 +107,40 @@ services:
     depends_on:
       init:
         condition: service_completed_successfully
+      tools:
+        condition: service_healthy
+
+  tools:
+    image: ${TEASSISTANT_TOOLS_IMAGE:-teassistant:tools-local}
+    build:
+      context: .
+      dockerfile: Dockerfile.tools
+    restart: unless-stopped
+    environment:
+      TOOL_WORK_ROOT: /app/work
+    volumes:
+      - private_data:/app/work
+    networks:
+      - tool-net
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 90s
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=3).read()"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 5
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
 
 volumes:
   postgres_data:
   private_data:
+
+networks:
+  tool-net:
+    internal: true

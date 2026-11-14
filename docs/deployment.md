@@ -1,22 +1,22 @@
 # Docker 单服务器部署
 
-本方案使用轻量 API 镜像和完整 Worker 镜像：前端、账号、上传与查询在 API 中；中文字体、LibreOffice、Chromium、Pandoc 和 XeLaTeX 留在 Worker 中。两者使用同一源码版本、数据库任务队列和文件卷，不新增外部转换服务。数据库、上传文件、生成文件和题库放在镜像外，更新镜像不删除它们。默认有 API、独立数据库任务 Worker、PostgreSQL 三个常驻服务；init 一次性初始化表与默认提示词。首次建表完成后才启动 API 和 Worker，管理员账号需显式创建。
+本方案部署 API、业务 Worker、工具服务和 PostgreSQL 四个常驻服务，另有一次性 init。API 负责网页、账号与上传；业务 Worker 负责持久任务、DeepSeek、题库、抽题及发布；tools 负责 Word/PDF/LaTeX 和 Chromium 截图。tools 无数据库和模型凭据，不映射宿主端口。工作卷承载文件，镜像更新不删除业务数据。服务分工与协议见 [工具服务合同](acceptance/tools-worker-v1.md)。
 
 ## 镜像体积与更新成本
 
-完整 Worker 镜像保留 LibreOffice、Chromium、Pandoc 和中文 XeLaTeX，以支持原生 Word 公式、题库来源渲染及 PDF 排版。API 使用 Python Alpine 和独立锁定的依赖组，保留 PDFium 以支持 PDF 上传校验，不含浏览器及导出工具。Node 前端构建环境、Git、uv 和依赖下载缓存留在构建阶段；生产镜像排除后端测试代码，依赖复制前清理 Python 字节码，安装系统包的同一层清理帮助页、部分离线文档和 APT 缓存，保留版权说明及运行资源。
+重型工具只进入独立工具镜像。业务 Worker 保留业务 Python 依赖和公式转换模块；API 使用轻量依赖组。工具 Dockerfile 只复制 tools/，普通业务源码、前端及 uv.lock 变化不改变工具镜像内容摘要。普通业务发布复用已发布的工具摘要镜像，首次或工具变化才构建；修改工具实现或其系统/Python依赖仍须重建工具镜像。
 
 每个平台的 CI 构建完成并通过容器冒烟后，在 Actions Summary 记录未压缩镜像大小及主要目录占用。也可在镜像所在机器运行 `python3 scripts/image_size_report.py --image teassistant:local`。该数值不等于仓库压缩下载量、内存占用或共享层条件下新增磁盘量；BuildKit 的 GitHub Actions 缓存还包含中间构建阶段，不能用缓存导出量代表部署镜像大小。
 
-API 镜像以 Docker 累计未压缩 `.Size ≤200,000,000 bytes` 为硬门槛，CI 超限停止发布。这不是整套部署的磁盘或内存限额：完整 Worker、PostgreSQL、缓存、题库与数据卷另外占用空间。比较瘦身前后应固定架构和基础镜像版本，并分别验证 Word、LaTeX PDF、中文和 Chromium；本批证据见 [轻量 API 验收记录](acceptance/lean-api-v1.md)。
+API 镜像以 Docker 累计未压缩 `.Size ≤200,000,000 bytes` 为硬门槛，CI 超限停止发布。这不是整套部署的磁盘或内存限额：业务 Worker、工具服务、PostgreSQL、缓存、题库与数据卷另外占用空间。比较瘦身前后应固定架构和基础镜像版本，并分别验证 Word、LaTeX PDF、中文和 Chromium；本批证据见 [轻量 API 验收记录](acceptance/lean-api-v1.md)。
 
-新生成配置默认 `TEASSISTANT_IMAGE=teassistant:local`、`TEASSISTANT_API_IMAGE=teassistant:api-local`、`TEASSISTANT_API_TARGET=api`。`deploy.py build` 和 `bootstrap --build` 都构建 API 与 Worker；`pull` 也拉取两者及数据库。旧配置不含新键时，API/init 继续使用原完整镜像和 runtime 构建目标，保留兼容性；要启用拆分需补齐新键。轻量 API 与 Worker 不可设置成同一个镜像引用，否则不同 target 会覆盖彼此。
+新配置使用独立的业务、API 和工具镜像引用。`deploy.py build`、`up --build` 和 `bootstrap --build` 只构建业务 Worker/API，工具通过 `build-tools` 单独构建；首次源码部署先执行该步骤。`pull` 拉取三类镜像及数据库；工具固定引用不变时复用已有层。旧配置仍可选择 runtime 兼容构建目标，但新 Compose 已包含工具服务，升级时需补充工具镜像引用。三类镜像不可共用标签。
 
-自行构建时，`docker build --target api -t teassistant:api-local .` 生成主镜像，`docker build --target runtime -t teassistant:local .` 生成完整 Worker；默认不写 target 仍构建完整镜像。API 镜像不能代替完整 Worker 来执行真实题库加工或导出。
+自行构建使用 `docker build --target worker -t teassistant:local .`、`docker build --target api -t teassistant:api-local .`，工具使用 `docker build -f Dockerfile.tools -t teassistant:tools-local .`。默认 runtime 为历史全工具构建目标，不能用其大小代表业务 Worker。
 
 ## 首次启动
 
-ROCK 5B的ARM64原生构建、账号预设及克隆边界见 [板上部署指南](rock5b-deployment.md)。已有私有账号JSON时，可在环境和配置准备后执行 `python3 scripts/deploy.py bootstrap --build --accounts-file .accounts.deploy.json`，完成启动及幂等账号初始化；它不会覆盖已有密码、角色或额度。
+ROCK 5B的ARM64原生构建、账号预设及克隆边界见 [板上部署指南](rock5b-deployment.md)。已有私有账号JSON时，可在工具镜像已构建或拉取、环境和配置准备后执行 `python3 scripts/deploy.py bootstrap --build --accounts-file .accounts.deploy.json`，完成启动及幂等账号初始化；它不会覆盖已有密码、角色或额度。
 
 服务器需要 Docker Engine、Docker Compose v2（建议 2.32 及以上）和 Python 3.10 或更新版本。辅助 CLI 只使用标准库；业务 Python 3.13 环境已封装在镜像内，宿主机不需要 uv、Node、pnpm 或数学导出工具。克隆项目后，在项目根目录执行：
 
@@ -33,6 +33,8 @@ python3 scripts/deploy.py init
 | `TEASSISTANT_IMAGE` | 首次本地构建可用 `teassistant:local`；发布后改为 GHCR 版本标签或不可变 digest |
 | `TEASSISTANT_API_IMAGE` | 轻量 API/init 镜像；发布时使用同一次运行提供的 `api-完整SHA` 标签或对应 digest，不混用版本 |
 | `TEASSISTANT_API_TARGET` | 新配置为 `api`；旧配置缺省为 `runtime`，控制本地构建目标，不改变已发布镜像内容 |
+| `TEASSISTANT_WORKER_TARGET` | 新配置为 `worker`，业务镜像不安装重型系统工具；旧配置缺省为兼容 `runtime` |
+| `TEASSISTANT_TOOLS_IMAGE` | 独立工具镜像，首次源码构建用 `teassistant:tools-local`；预编译部署填写发布的内容摘要标签或 digest，业务更新时保留此值 |
 | `TEASSISTANT_DB_PASSWORD` | init 生成的 64 位十六进制随机值；修改为自定义值时限 20–128 位 URL 安全字符，避免 DSN 编码问题 |
 | `DEEPSEEK_API_KEY` / `DEEPSEEK_MODEL` | 密钥可暂空，启动后在管理员网页保存；环境变量作为后备。本批网页模型限定 `deepseek-flash` 与官方地址，镜像构建不需要密钥 |
 | `TEASSISTANT_BIND` / `TEASSISTANT_PORT` | 默认 `127.0.0.1:8000`；需要受控内网访问时可显式设置 `0.0.0.0` |
@@ -48,6 +50,7 @@ python3 scripts/deploy.py init
 
 ```bash
 python3 scripts/deploy.py check
+python3 scripts/deploy.py build-tools
 python3 scripts/deploy.py up --build
 python3 scripts/deploy.py status
 python3 scripts/deploy.py admin --username your-admin --display-name 管理员
@@ -108,7 +111,7 @@ check 验证配置、必需文件和 Compose 语法，不代替题库全部内�
 
 推送代码后先在仓库 Actions 查看结果，再从该次发布记录选择镜像标签或 digest。私有 GHCR 包需要服务器以具有 `read:packages` 的账户凭据登录；使用交互 `docker login ghcr.io`，不要把令牌写进本项目配置、shell 命令参数或仓库。
 
-发布摘要会提供配套的 `TEASSISTANT_IMAGE=ghcr.io/contr4l/teassistant:完整SHA` 与 `TEASSISTANT_API_IMAGE=ghcr.io/contr4l/teassistant:api-完整SHA`，一起更新原 `.env.deploy`；本地构建启用拆分时另设 `TEASSISTANT_API_TARGET=api`。完整镜像既有 SHA/latest/vN.N.N 标签保持，轻量 API 对应 api-SHA/api-latest/api-vN.N.N。两类镜像都经过各自平台检查和混合容器冒烟后发布。
+工具镜像以 `python3 scripts/tool_image_ref.py` 计算的内容摘要标签单独固定到 `TEASSISTANT_TOOLS_IMAGE`（也可固定对应 digest）。业务更新保留此键；首次或工具版本变动时再更新。发布摘要会提供配套的 `TEASSISTANT_IMAGE=ghcr.io/contr4l/teassistant:完整SHA` 与 `TEASSISTANT_API_IMAGE=ghcr.io/contr4l/teassistant:api-完整SHA`，一起更新原 `.env.deploy`；本地构建启用拆分时另设 `TEASSISTANT_API_TARGET=api`。业务 Worker 使用既有 SHA/latest/vN.N.N 标签，轻量 API 对应 api-SHA/api-latest/api-vN.N.N。两类镜像都经过各自平台检查和混合容器冒烟后发布。
 
 仓库需允许工作流请求`packages: write`，组织策略可能另外限制发布。版本标签须为`v主版本.次版本.修订版本`，并在Rulesets保护`v*`；未保护标签只检查，不发布。默认分支push/手动运行生成latest与完整提交SHA标签，每次成功发布摘要给出可复制的`TEASSISTANT_IMAGE=...:提交SHA`。PR及非默认分支手动运行不发布，PR构建任务无包写权限。镜像默认可见性不由本流程更改，首次GHCR包通常为private；公开包可匿名拉取，私有包由用户使用具有read:packages权限的PAT登录，不能用GitHub账户密码代替令牌。
 
@@ -120,9 +123,9 @@ python3 scripts/deploy.py pull
 python3 scripts/deploy.py up
 ```
 
-更新采用同样两条命令，`up`明确带`--no-build`，镜像拉取失败不会悄悄在板上重新编译。保留原Compose项目名、端口、数据库密码、种子挂载及两个数据卷；API和Worker使用同一次发布的配套镜像。首次下载包含TeX/字体/Chromium的大镜像层，后续复用已有层，只拉取变化内容，耗时仍取决于网络和缓存。
+更新采用同样两条命令，`up`明确带`--no-build`，镜像拉取失败不会悄悄在板上重新编译。保留原Compose项目名、端口、数据库密码、种子挂载及两个数据卷；API和Worker使用同一次发布的配套镜像。首次拉取工具镜像需下载TeX/字体/Chromium的大镜像层，后续复用已有层，只拉取变化内容，耗时仍取决于网络和缓存。
 
-首次从旧单镜像部署切换到轻量 API 时，先在原部署目录同步本次 `compose.yaml` 与 `scripts/deploy.py`，再参考 `.env.deploy.example` 将新键补入原 `.env.deploy`，然后执行 `pull`、`up`。保留已有配置文件、项目名、数据库密码、题库挂载及数据卷，不用示例配置覆盖原文件，也无需重新初始化账号。后续镜像升级继续使用配套的两个版本引用；升级前按下节备份，成功后刷新网页确认版本和业务。
+首次从旧单镜像部署切换到轻量 API 时，先在原部署目录同步本次 `compose.yaml` 与 `scripts/deploy.py`，再参考 `.env.deploy.example` 将新键补入原 `.env.deploy`，然后执行 `pull`、`up`。保留已有配置文件、项目名、数据库密码、题库挂载及数据卷，不用示例配置覆盖原文件，也无需重新初始化账号。后续业务镜像升级使用配套的 API/Worker 引用，并保留已验证的工具引用；升级前按下节备份，成功后刷新网页确认版本和业务。
 
 建议固定不可变digest；完整提交SHA标签比latest易追踪，但同一提交重新构建仍可能覆盖其SHA标签（上游基础镜像可更新）。可在板子执行`docker image inspect 镜像引用 --format '{{json .RepoDigests}}'`取得digest，再把准确引用写入`.env.deploy`。GHCR不提供多个标签的跨标签事务，网络中断可能留下SHA已发布但latest未更新；只按最终成功运行的摘要部署，不把失败运行的中间推送当完整发布。
 

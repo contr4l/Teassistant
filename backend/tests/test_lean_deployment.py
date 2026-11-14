@@ -28,6 +28,30 @@ def test_new_template_defaults_to_distinct_api_image_and_api_target(tmp_path):
     assert deploy.validate_config(values)
 
 
+def test_new_template_selects_business_worker_and_independent_tools(tmp_path):
+    _env_file, values = _config(tmp_path)
+    assert values["TEASSISTANT_WORKER_TARGET"] == "worker"
+    assert values["TEASSISTANT_TOOLS_IMAGE"] not in {
+        values["TEASSISTANT_IMAGE"], values["TEASSISTANT_API_IMAGE"]
+    }
+
+
+@pytest.mark.parametrize("target", ["api", "tools", "invalid"])
+def test_invalid_business_worker_build_target_rejected(tmp_path, target):
+    _env_file, values = _config(tmp_path)
+    values["TEASSISTANT_WORKER_TARGET"] = target
+    with pytest.raises(deploy.DeploymentError, match="Worker build target"):
+        deploy.validate_config(values)
+
+
+@pytest.mark.parametrize("application_key", ["TEASSISTANT_IMAGE", "TEASSISTANT_API_IMAGE"])
+def test_tool_image_cannot_overwrite_application_image(tmp_path, application_key):
+    _env_file, values = _config(tmp_path)
+    values["TEASSISTANT_TOOLS_IMAGE"] = values[application_key]
+    with pytest.raises(deploy.DeploymentError, match="distinct image"):
+        deploy.validate_config(values)
+
+
 @pytest.mark.parametrize("target", ["api-runtime", "worker", "invalid"])
 def test_invalid_api_target_is_rejected(tmp_path, target):
     _env_file, values = _config(tmp_path)
@@ -74,7 +98,8 @@ def test_legacy_configuration_without_api_keys_remains_valid(tmp_path):
     "operation,expected",
     [
         ("build", ["build", "worker", "api"]),
-        ("pull", ["pull", "postgres", "worker", "api"]),
+        ("pull", ["pull", "postgres", "tools", "worker", "api"]),
+        ("build-tools", ["build", "tools"]),
     ],
 )
 def test_build_and_pull_cover_both_images_and_database(tmp_path, monkeypatch, operation, expected):

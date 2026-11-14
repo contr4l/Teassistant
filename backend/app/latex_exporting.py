@@ -38,6 +38,7 @@ from app.source_exporting import (
     _validate_snapshot_membership,
     _validate_source_bank,
 )
+from app.tool_client import ToolClientError, convert_tex_pdf, tools_enabled
 
 LayoutMode = Literal["answer_space", "compact"]
 _IMAGE_SUFFIX = {"PNG": ".png", "JPEG": ".jpg", "GIF": ".gif", "TIFF": ".tif"}
@@ -839,24 +840,35 @@ def _compile_pdf(tex_path: Path, build_dir: Path, executable: str) -> Path:
     ]
     log_parts = []
     for _ in range(_MAX_TEX_PASSES):
-        try:
-            result = subprocess.run(
-                command,
-                cwd=tex_path.parent,
-                capture_output=True,
-                text=True,
-                timeout=_MAX_TEX_COMPILE_SECONDS,
-                check=False,
-            )
-        except subprocess.TimeoutExpired as exc:
-            raise ExportError("XeLaTeX compile timed out") from exc
-        except OSError as exc:
-            raise ConverterUnavailable("XeLaTeX could not be started") from exc
-        log_parts.extend((result.stdout or "", result.stderr or ""))
+        if tools_enabled():
+            try:
+                result = convert_tex_pdf(tex_path, build_dir)
+            except ToolClientError as exc:
+                raise ExportError(f"XeLaTeX remote compile failed: {exc}") from exc
+        else:
+            try:
+                local = subprocess.run(
+                    command,
+                    cwd=tex_path.parent,
+                    capture_output=True,
+                    text=True,
+                    timeout=_MAX_TEX_COMPILE_SECONDS,
+                    check=False,
+                )
+            except subprocess.TimeoutExpired as exc:
+                raise ExportError("XeLaTeX compile timed out") from exc
+            except OSError as exc:
+                raise ConverterUnavailable("XeLaTeX could not be started") from exc
+            result = {
+                "returncode": local.returncode,
+                "stdout": local.stdout or "",
+                "stderr": local.stderr or "",
+            }
+        log_parts.extend((result["stdout"], result["stderr"]))
         log_path = build_dir / (tex_path.stem + ".log")
         if log_path.is_file():
             log_parts.append(log_path.read_text(encoding="utf-8", errors="replace"))
-        if result.returncode != 0:
+        if result["returncode"] != 0:
             raise ExportError(
                 "XeLaTeX compilation failed: " + _tex_error_summary("\n".join(log_parts))
             )
@@ -918,7 +930,7 @@ def export_latex_snapshot(
         ):
             raise ExportError("snapshot contains an ineligible source question")
 
-    executable = _available_executable(xelatex_executable)
+    executable = "xelatex" if tools_enabled() else _available_executable(xelatex_executable)
     if not executable:
         raise ConverterUnavailable("XeLaTeX is required for LaTeX PDF export")
     final_dir = Path(output_dir).absolute()

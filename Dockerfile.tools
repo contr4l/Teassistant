@@ -1,0 +1,57 @@
+FROM python:3.13-slim-bookworm
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        chromium \
+        fontconfig \
+        fonts-noto-cjk \
+        libatomic1 \
+        libreoffice-writer \
+        pandoc \
+        texlive-fonts-recommended \
+        texlive-lang-chinese \
+        texlive-latex-extra \
+        texlive-xetex \
+        tzdata \
+    && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* \
+        /usr/share/man /usr/share/info \
+    && find /usr/share/doc -type f \
+        \( -iname '*.pdf' -o -iname '*.html' -o -iname '*.html.gz' \
+           -o -iname '*changelog*' -o -iname 'NEWS*' -o -iname 'README*' \) \
+        ! -iname '*copyright*' ! -iname '*license*' ! -iname '*copying*' -delete \
+    && groupadd --gid 10001 teassistant \
+    && useradd --uid 10001 --gid 10001 --no-create-home --shell /usr/sbin/nologin teassistant \
+    && mkdir -p /app/work /app/work/home /app/work/cache /app/work/tmp \
+    && chown -R 10001:10001 /app/work
+
+WORKDIR /app
+COPY tools/requirements.txt ./tools/requirements.txt
+RUN python -m pip install --no-cache-dir --disable-pip-version-check \
+        -r /app/tools/requirements.txt \
+    && python -c 'import playwright; print("Playwright Python runtime ready")'
+COPY --chown=0:0 tools/worker.py ./tools/worker.py
+
+ENV HOME=/app/work/home \
+    PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    TOOL_WORK_ROOT=/app/work \
+    TOOL_SOFFICE=/usr/bin/libreoffice \
+    TOOL_PANDOC=/usr/bin/pandoc \
+    TOOL_XELATEX=/usr/bin/xelatex \
+    TOOL_CHROMIUM=/usr/bin/chromium \
+    XDG_CACHE_HOME=/app/work/cache \
+    TMPDIR=/app/work/tmp
+VOLUME ["/app/work"]
+EXPOSE 8001
+USER 10001:10001
+CMD ["python", "/app/tools/worker.py"]
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+    CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=3).read()"]
+
+ARG VCS_REF=unknown
+LABEL org.opencontainers.image.source="https://github.com/contr4l/Teassistant" \
+    org.opencontainers.image.revision="${VCS_REF}"

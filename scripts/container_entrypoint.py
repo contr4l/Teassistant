@@ -42,6 +42,14 @@ def validate_runtime_config() -> None:
         raise ValueError("source bank path unavailable")
     if settings.semantic_dir and not settings.semantic_dir.is_dir():
         raise ValueError("semantic source path unavailable")
+    if os.environ.get("TEASSISTANT_TOOLS_URL"):
+        # Both processes must see converter inputs, including temporary export stages.
+        shared_root = Path("/app/work").resolve()
+        temporary = Path(os.environ.get("TMPDIR", "/app/work/tmp")).resolve()
+        if not temporary.is_relative_to(shared_root) or temporary == shared_root:
+            raise ValueError("remote tools require shared temporary storage")
+        temporary.mkdir(parents=True, exist_ok=True)
+        os.environ["TMPDIR"] = str(temporary)
 
 
 def main(argv: Sequence[str] | None = None) -> int:

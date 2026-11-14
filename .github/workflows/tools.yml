@@ -1,0 +1,208 @@
+name: Tools image
+
+on:
+  pull_request:
+    paths:
+      - Dockerfile.tools
+      - tools/**
+      - scripts/tool_image_ref.py
+      - .github/workflows/tools.yml
+  push:
+    branches: ["**"]
+    paths:
+      - Dockerfile.tools
+      - tools/**
+      - scripts/tool_image_ref.py
+      - .github/workflows/tools.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build-test:
+    name: Build and health-check ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            platform: linux/amd64
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            platform: linux/arm64
+            arch: arm64
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+      - name: Build native tools image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
+        with:
+          context: .
+          file: ./Dockerfile.tools
+          platforms: ${{ matrix.platform }}
+          load: true
+          tags: teassistant-tools-ci:${{ github.sha }}-${{ matrix.arch }}
+          cache-from: type=gha,scope=tools-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=tools-${{ matrix.arch }}
+          provenance: false
+          sbom: false
+      - name: Verify architecture and service health
+        env:
+          IMAGE_TAG: teassistant-tools-ci:${{ github.sha }}-${{ matrix.arch }}
+          EXPECTED_ARCH: ${{ matrix.arch }}
+          CONTAINER_NAME: ta-tools-smoke-${{ github.run_id }}-${{ matrix.arch }}
+        shell: bash
+        run: |
+          actual_arch="$(docker image inspect --format '{{.Architecture}}' "$IMAGE_TAG")"
+          [[ "$actual_arch" == "$EXPECTED_ARCH" ]]
+          docker run --detach --network none --name "$CONTAINER_NAME" "$IMAGE_TAG" >/dev/null
+          cleanup() { docker rm --force "$CONTAINER_NAME" >/dev/null 2>&1 || true; }
+          trap cleanup EXIT
+          healthy=false
+          for _ in $(seq 1 45); do
+            status="$(docker inspect --format '{{.State.Health.Status}}' "$CONTAINER_NAME" 2>/dev/null || true)"
+            if [[ "$status" == healthy ]]; then healthy=true; break; fi
+            if [[ "$status" == unhealthy || "$(docker inspect --format '{{.State.Status}}' "$CONTAINER_NAME")" != running ]]; then
+              docker logs "$CONTAINER_NAME"
+              exit 1
+            fi
+            sleep 2
+          done
+          [[ "$healthy" == true ]]
+          docker exec "$CONTAINER_NAME" python -c "import urllib.request; response=urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=3); assert response.status == 200"
+          docker exec -i "$CONTAINER_NAME" python - <<'PY'
+          import base64
+          import json
+          import pathlib
+          import urllib.error
+          import urllib.request
+
+          root = pathlib.Path("/app/work/tools-smoke")
+          root.mkdir(parents=True, exist_ok=True)
+          (root / "source.md").write_text("# Synthetic tool smoke\n\n$x^2 + 1$\n", encoding="utf-8")
+          (root / "source.tex").write_text(
+              r"\documentclass{article}\usepackage{amsmath}\begin{document}"
+              r"Synthetic tool smoke: $x^2+1$.\end{document}", encoding="utf-8"
+          )
+
+          def post(path, payload):
+              request = urllib.request.Request(
+                  "http://127.0.0.1:8001" + path,
+                  data=json.dumps(payload).encode(),
+                  headers={"Content-Type": "application/json"},
+              )
+              with urllib.request.urlopen(request, timeout=120) as response:
+                  return json.loads(response.read())
+
+          docx = root / "source.docx"
+          pandoc = post("/v1/pandoc", {"source": str(root / "source.md"), "target": str(docx)})
+          assert pandoc["version"] == "tools-v1" and pandoc["returncode"] == 0 and docx.is_file()
+          word_dir, profile = root / "word-pdf", root / "profile"
+          word_dir.mkdir(exist_ok=True)
+          profile.mkdir(exist_ok=True)
+          word = post("/v1/word-pdf", {
+              "source": str(docx), "output_dir": str(word_dir), "profile_dir": str(profile)
+          })
+          assert word["returncode"] == 0 and (word_dir / "source.pdf").read_bytes().startswith(b"%PDF-")
+          tex_dir = root / "tex-pdf"
+          tex_dir.mkdir(exist_ok=True)
+          tex = post("/v1/tex-pdf", {"source": str(root / "source.tex"), "output_dir": str(tex_dir)})
+          assert tex["returncode"] == 0 and (tex_dir / "source.pdf").read_bytes().startswith(b"%PDF-")
+          screenshot = post("/v1/screenshot", {"html": "<meta charset=utf-8><h1>Synthetic</h1>"})
+          png = base64.b64decode(screenshot["png_base64"], validate=True)
+          assert screenshot["version"] == "tools-v1" and png.startswith(b"\x89PNG\r\n\x1a\n")
+          request = urllib.request.Request(
+              "http://127.0.0.1:8001/v1/pandoc",
+              data=json.dumps({"source": "/etc/passwd", "target": str(root / "escape.docx")}).encode(),
+              headers={"Content-Type": "application/json"},
+          )
+          try:
+              urllib.request.urlopen(request, timeout=3)
+          except urllib.error.HTTPError as error:
+              assert error.code == 400
+          else:
+              raise AssertionError("tools service accepted a path outside TOOL_WORK_ROOT")
+          print("pandoc, LibreOffice PDF, XeLaTeX PDF, screenshot and path guard passed")
+          PY
+      - name: Stage tested image for trusted publication
+        if: >-
+          (github.event_name == 'push' &&
+           github.ref == format('refs/heads/{0}', github.event.repository.default_branch)) ||
+          (github.event_name == 'workflow_dispatch' &&
+           github.ref == format('refs/heads/{0}', github.event.repository.default_branch))
+        env:
+          IMAGE_TAG: teassistant-tools-ci:${{ github.sha }}-${{ matrix.arch }}
+          STAGE_TAG: staging-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.arch }}
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GHCR_USER" --password-stdin
+          docker tag "$IMAGE_TAG" "ghcr.io/contr4l/teassistant-tools:$STAGE_TAG"
+          docker push "ghcr.io/contr4l/teassistant-tools:$STAGE_TAG"
+
+  publish:
+    name: Verify and publish immutable multi-architecture tools tag
+    runs-on: ubuntu-24.04
+    needs: [build-test]
+    if: >-
+      (github.event_name == 'push' &&
+       github.ref == format('refs/heads/{0}', github.event.repository.default_branch)) ||
+      (github.event_name == 'workflow_dispatch' &&
+       github.ref == format('refs/heads/{0}', github.event.repository.default_branch))
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Calculate content reference
+        id: ref
+        run: |
+          echo "image=$(python3 scripts/tool_image_ref.py)" >> "$GITHUB_OUTPUT"
+          echo "hash=$(python3 scripts/tool_image_ref.py --hash-only)" >> "$GITHUB_OUTPUT"
+      - name: Authenticate after native image checks passed
+        env:
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GHCR_USER" --password-stdin
+      - name: Publish only after verifying both architecture descriptors
+        env:
+          IMAGE_REF: ${{ steps.ref.outputs.image }}
+          STAGE_AMD64: ghcr.io/contr4l/teassistant-tools:staging-${{ github.run_id }}-${{ github.run_attempt }}-amd64
+          STAGE_ARM64: ghcr.io/contr4l/teassistant-tools:staging-${{ github.run_id }}-${{ github.run_attempt }}-arm64
+          EVENT_NAME: ${{ github.event_name }}
+        shell: bash
+        run: |
+          manifest="$RUNNER_TEMP/tools-manifest.json"
+          verified="$RUNNER_TEMP/tools-platforms.json"
+          expected="$RUNNER_TEMP/tools-expected-platforms.json"
+          manifest_error="$RUNNER_TEMP/existing-tools-manifest-error.txt"
+          if docker manifest inspect "$IMAGE_REF" > "$manifest" 2>"$manifest_error"; then
+            python3 scripts/verify_image_manifest.py --input "$manifest" > "$verified"
+          else
+            if ! grep -Eqi 'manifest unknown|no such manifest|name unknown' "$manifest_error"; then
+              cat "$manifest_error" >&2
+              exit 1
+            fi
+            docker manifest create "$IMAGE_REF" "$STAGE_AMD64" "$STAGE_ARM64"
+            docker manifest inspect "$IMAGE_REF" > "$manifest"
+            python3 scripts/verify_image_manifest.py --input "$manifest" > "$expected"
+            docker manifest push --purge "$IMAGE_REF"
+            docker manifest inspect "$IMAGE_REF" > "$manifest"
+            python3 scripts/verify_image_manifest.py --input "$manifest" > "$verified"
+            cmp "$expected" "$verified"
+          fi
+          cat "$verified" >> "$GITHUB_STEP_SUMMARY"
+          echo "Tools image: $IMAGE_REF" >> "$GITHUB_STEP_SUMMARY"

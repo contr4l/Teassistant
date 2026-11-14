@@ -69,6 +69,48 @@ RUN GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.version GIT_CONFIG_VALUE_0=HTTP/1.1
     uv sync --locked --no-dev --group export --no-install-project \
     && find /app/.venv -type d -name __pycache__ -prune -exec rm -rf '{}' +
 
+# Main business worker. Browser, Word and PDF conversion run in tools/worker.py.
+# Keep this target on the full Python dependency set, but without the large OS
+# toolchain below so ordinary application releases remain small and quick.
+FROM python:3.13-slim-bookworm AS worker
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates libatomic1 \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+COPY --from=python-dependencies /app/.venv /app/.venv
+COPY --chown=0:0 backend/app ./backend/app
+COPY --chown=0:0 scripts ./scripts
+COPY --chown=0:0 data ./data
+COPY --chown=0:0 templates ./templates
+COPY --from=frontend --chown=0:0 /build/dist ./frontend/dist
+RUN groupadd --gid 10001 teassistant \
+    && useradd --uid 10001 --gid 10001 --no-create-home --shell /usr/sbin/nologin teassistant \
+    && mkdir -p /app/work/home /app/work/cache /app/work/tmp /bank \
+    && chown -R 10001:10001 /app/work \
+    && chmod 0555 /bank
+ENV HOME=/app/work/home \
+    PATH=/app/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+    PYTHONPATH=/app/backend \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    TEASSISTANT_ALLOW_CODEX=0 \
+    TEASSISTANT_DATA_DIR=/app/work/web/private \
+    TEASSISTANT_FRONTEND_DIST=/app/frontend/dist \
+    TEASSISTANT_MODEL_PROVIDER=deepseek \
+    XDG_CACHE_HOME=/app/work/cache \
+    TMPDIR=/app/work/tmp
+VOLUME ["/app/work"]
+USER 10001:10001
+ENTRYPOINT ["/app/.venv/bin/python", "/app/scripts/container_entrypoint.py"]
+CMD ["/app/.venv/bin/python", "/app/scripts/run_web_worker.py"]
+HEALTHCHECK --interval=30s --timeout=5s --start-period=90s --retries=3 \
+    CMD ["/app/.venv/bin/python", "/app/scripts/container_healthcheck.py", "--role", "worker"]
+ARG VCS_REF=unknown
+LABEL org.opencontainers.image.source="https://github.com/contr4l/Teassistant" \
+    org.opencontainers.image.revision="${VCS_REF}"
+
+# Legacy full runtime target retained for existing local/deployment configs.
+
 FROM python:3.13-slim-bookworm AS runtime
 # Keep Debian copyright notices and licenses; discard offline reading material.
 RUN apt-get update \

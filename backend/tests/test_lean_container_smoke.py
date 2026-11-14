@@ -39,6 +39,21 @@ def test_mixed_images_must_have_matching_platforms(monkeypatch):
     assert all(command[1:3] == ["image", "inspect"] for command in commands)
 
 
+def test_tools_image_must_match_worker_platform(monkeypatch):
+    commands = []
+
+    def inspect(command, **_kwargs):
+        commands.append(command)
+        return "linux/arm64\n" if command[-1] == "worker:local" else "linux/amd64\n"
+
+    monkeypatch.setattr(smoke.shutil, "which", lambda _name: "/synthetic/docker")
+    monkeypatch.setattr(smoke, "_run", inspect)
+    with pytest.raises(ValueError, match="same platform"):
+        smoke.run_smoke("worker:local", tools_image="tools:local")
+    assert len(commands) == 2
+    assert all(command[1:3] == ["image", "inspect"] for command in commands)
+
+
 def test_compose_routes_api_init_and_worker_to_the_intended_images(tmp_path):
     config = smoke._compose_text(
         "worker:full", tmp_path / "share", "temporary-db-password", api_image="api:lean"

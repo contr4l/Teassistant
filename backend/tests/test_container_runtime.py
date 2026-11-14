@@ -48,6 +48,14 @@ def test_container_does_not_silently_use_developer_sqlite_default(monkeypatch, t
     assert container_entrypoint.main(["--check-config"]) == 78
 
 
+def test_remote_tools_reject_private_container_temporary_directory(monkeypatch, tmp_path):
+    _production_env(monkeypatch, tmp_path)
+    monkeypatch.setenv("TEASSISTANT_TOOLS_URL", "http://tools:8001")
+    monkeypatch.setenv("TMPDIR", str(tmp_path / "not-shared"))
+    assert container_entrypoint.main(["--check-config"]) == 78
+    assert not (tmp_path / "not-shared").exists()
+
+
 def test_entrypoint_rejects_codex_routing_without_echoing_configuration(
     monkeypatch, capsys
 ) -> None:

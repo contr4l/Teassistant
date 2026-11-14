@@ -31,15 +31,16 @@
 
 ## Docker 单机部署
 
-主应用与工具 Worker 使用配套镜像：API 的未压缩大小门槛为 200 MB，Worker 保留 Word/PDF、中文 LaTeX 与题库浏览器渲染能力。发布摘要分别提供 `TEASSISTANT_API_IMAGE` 与 `TEASSISTANT_IMAGE`，升级时一起更新；整套部署的空间不受 200 MB 限制。
+部署由 API、业务 `worker`、独立 `tools` 和 PostgreSQL 组成。API 的未压缩大小门槛为 200 MB；重型 Word/PDF、中文 LaTeX 与浏览器环境留在 tools。普通业务升级更新 `TEASSISTANT_API_IMAGE` 与 `TEASSISTANT_IMAGE`，保留固定的 `TEASSISTANT_TOOLS_IMAGE`，无需重建工具镜像；整套部署空间不受 200 MB 限制。分工和验证边界见[工具服务合同](docs/acceptance/tools-worker-v1.md)。
 
-ROCK 5B（ARM64）环境确认与预设账号见[板上部署指南](docs/rock5b-deployment.md)。日常升级优先从成功的GitHub Actions运行取得GHCR多架构镜像，在原`.env.deploy`设置镜像引用后运行`python3 scripts/deploy.py pull`及`python3 scripts/deploy.py up`，板子只下载并运行ARM64镜像。首次也可显式执行`python3 scripts/deploy.py bootstrap --build --accounts-file .accounts.deploy.json`本地构建。流水线配置完成、云端构建成功与板上健康分别验证，不互相替代。
+ROCK 5B（ARM64）环境确认与预设账号见[板上部署指南](docs/rock5b-deployment.md)。日常升级优先从成功的GitHub Actions运行取得GHCR多架构镜像，在原`.env.deploy`设置镜像引用后运行`python3 scripts/deploy.py pull`及`python3 scripts/deploy.py up`，板子只下载并运行ARM64镜像。首次源码部署先 `build-tools`，再显式执行 `bootstrap --build --accounts-file .accounts.deploy.json`。流水线配置完成、云端构建成功与板上健康分别验证，不互相替代。
 
 服务器准备 Docker Engine、Compose v2 和 Python 3（仅标准库），不需要在宿主机安装 Node、uv、中文字体或 LaTeX。部署配置与开发配置分开：
 
 ```bash
 python3 scripts/deploy.py init
 # 编辑 .env.deploy；DeepSeek 密钥可启动后在管理员网页填写，题库可后续挂载。
+python3 scripts/deploy.py build-tools
 python3 scripts/deploy.py up --build
 python3 scripts/deploy.py admin --username your-admin
 ```

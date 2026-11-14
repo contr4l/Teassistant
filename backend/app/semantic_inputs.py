@@ -19,6 +19,8 @@ from typing import Iterator
 from lxml import html as lxml_html
 from PIL import Image
 
+from app.tool_client import ToolClientError, render_screenshot, tools_enabled
+
 _MATH_TAGS = {
     "math",
     "mrow",
@@ -302,6 +304,23 @@ def _render_page(page: object, html_page: str, *, output_dir: Path, qindex: int)
     return _tiles(screenshot, output_dir, qindex)
 
 
+def _render_remote_page(html_page: str, *, output_dir: Path, qindex: int) -> list[dict]:
+    try:
+        screenshot, width, height = render_screenshot(html_page)
+    except ToolClientError as exc:
+        raise ValueError(f"remote browser screenshot failed: {exc}") from exc
+    from io import BytesIO
+
+    try:
+        with Image.open(BytesIO(screenshot)) as image:
+            image.load()
+            if image.format != "PNG" or image.size != (width, height):
+                raise ValueError("remote screenshot dimensions do not match the PNG")
+    except (OSError, Image.DecompressionBombError) as exc:
+        raise ValueError("remote browser screenshot is not a valid PNG") from exc
+    return _tiles(screenshot, output_dir, qindex)
+
+
 def render_inputs(
     bank_dir: Path,
     output_dir: Path,
@@ -356,17 +375,26 @@ def render_inputs(
         image_root = stage / "images"
         image_root.mkdir()
         records = []
-        with _browser_page(chromium_executable) as page:
+        if tools_enabled():
             for index, qid in enumerate(selected_ids, 1):
                 question = by_id[qid]
                 prepared, body = _prepare_question(question, source_root)
-                tiles = _render_page(
-                    page,
-                    _html_document(body),
-                    output_dir=image_root,
-                    qindex=index,
+                tiles = _render_remote_page(
+                    _html_document(body), output_dir=image_root, qindex=index
                 )
                 records.append({**prepared, "images": tiles})
+        else:
+            with _browser_page(chromium_executable) as page:
+                for index, qid in enumerate(selected_ids, 1):
+                    question = by_id[qid]
+                    prepared, body = _prepare_question(question, source_root)
+                    tiles = _render_page(
+                        page,
+                        _html_document(body),
+                        output_dir=image_root,
+                        qindex=index,
+                    )
+                    records.append({**prepared, "images": tiles})
         manifest = {
             "source_bank_sha256": _sha256_bytes(bank_bytes),
             "renderer_version": "source-v3-renderer-v1",

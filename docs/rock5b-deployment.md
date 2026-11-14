@@ -8,7 +8,7 @@
 
 用户于2026-11-14确认板上服务已运行；当前工作区的Actions流程新增原生linux/amd64与linux/arm64构建、冒烟及多架构GHCR发布配置。是否已有可拉取版本，以实际成功的Actions发布结果为准；本地配置和测试不能代替远端构建或板上升级验证。
 
-日常升级优先使用[GitHub预构建镜像](deployment.md#使用-github-actions-镜像)：把同一次成功发布摘要中的`TEASSISTANT_IMAGE`（完整Worker）和`TEASSISTANT_API_IMAGE`（轻量API）一起写入原`.env.deploy`，然后执行`python3 scripts/deploy.py pull`和`python3 scripts/deploy.py up`。板子自动选取ARM64，不重新编译Node/Python或安装TeX/Chromium。需要在本地构建轻量API时还应设置`TEASSISTANT_API_TARGET=api`；未设置新键的旧配置仍使用完整镜像。下面的`--build`流程保留给首次本地构建和显式排障。
+日常升级优先使用[GitHub预构建镜像](deployment.md#使用-github-actions-镜像)：把同一次成功发布摘要中的`TEASSISTANT_IMAGE`（业务Worker）和`TEASSISTANT_API_IMAGE`（轻量API）一起写入原`.env.deploy`，，并将 `TEASSISTANT_TOOLS_IMAGE` 设为本次验证的固定工具引用，然后执行`python3 scripts/deploy.py pull`和`python3 scripts/deploy.py up`。板子自动选取ARM64，不重新编译Node/Python或安装TeX/Chromium。需要在本地构建轻量API时还应设置`TEASSISTANT_API_TARGET=api`；未设置新键的旧配置仍使用完整镜像。下面的`--build`流程保留给首次本地构建和显式排障。
 
 已有单镜像部署首次切换时，先同步本次 `compose.yaml` 和 `scripts/deploy.py`，再补齐原配置的新键。保留原 `.env.deploy`、数据库密码、项目名和数据卷；旧 Compose 文件不会使用新增的 API 镜像配置。
 
@@ -78,11 +78,13 @@ chmod 600 .accounts.deploy.json
 环境、私有配置及账号文件准备好后：
 
 ```bash
+# 首次源码部署单独构建工具；日常业务升级不重复此步骤。
+python3 scripts/deploy.py build-tools
 python3 scripts/deploy.py bootstrap --build --accounts-file .accounts.deploy.json
 python3 scripts/deploy.py status
 ```
 
-bootstrap先校验账号文件和权限，再创建缺失的`.env.deploy`、验证Compose、构建镜像、启动PostgreSQL/init/API/Worker并等待健康，最后通过容器stdin导入账号。密码不放在启动参数、环境变量或镜像中，日志不回显输入。已有部署配置保留，账号初始化失败会报失败，已启动的服务不会被伪称全部完成。
+bootstrap先校验账号文件和权限，再创建缺失的`.env.deploy`、验证Compose、构建镜像、启动PostgreSQL/init/API/业务Worker/tools并等待健康，最后通过容器stdin导入账号。密码不放在启动参数、环境变量或镜像中，日志不回显输入。已有部署配置保留，账号初始化失败会报失败，已启动的服务不会被伪称全部完成。
 
 配置局域网监听后访问`http://板子IP:8000`。先用管理员登录检查模型和默认额度，再以测试教师检查教师流程。DeepSeek key可以先留空，启动后在“管理设置→模型与额度”填写；缺key时不能实际识别手写答卷。
 

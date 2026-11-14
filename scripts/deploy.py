@@ -63,6 +63,15 @@ def read_config(env_file: Path) -> dict[str, str]:
 
 
 def validate_config(values: dict[str, str]) -> list[str]:
+    worker_target = values.get("TEASSISTANT_WORKER_TARGET", "runtime") or "runtime"
+    if worker_target not in {"worker", "runtime"}:
+        raise DeploymentError("Worker build target must be worker or runtime")
+    tools_image = values.get("TEASSISTANT_TOOLS_IMAGE") or "teassistant:tools-local"
+    if tools_image in {
+        values.get("TEASSISTANT_IMAGE") or "teassistant:local",
+        values.get("TEASSISTANT_API_IMAGE") or "teassistant:local",
+    }:
+        raise DeploymentError("Tools and application require distinct image references")
     api_target = values.get("TEASSISTANT_API_TARGET", "runtime") or "runtime"
     if api_target not in {"api", "runtime"}:
         raise DeploymentError("API build target must be api or runtime")
@@ -226,7 +235,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--env-file", type=Path, default=ROOT / ".env.deploy")
     sub = parser.add_subparsers(dest="command", required=True)
-    for command in ("init", "check", "build", "pull", "status", "stop"):
+    for command in ("init", "check", "build", "build-tools", "pull", "status", "stop"):
         sub.add_parser(command)
     up = sub.add_parser("up")
     up.add_argument("--build", action="store_true", help="build local image before startup")
@@ -253,7 +262,8 @@ def main(argv: list[str] | None = None) -> int:
         commands = {
             "check": None,
             "build": ["build", "worker", "api"],
-            "pull": ["pull", "postgres", "worker", "api"],
+            "build-tools": ["build", "tools"],
+            "pull": ["pull", "postgres", "tools", "worker", "api"],
             "status": ["ps", "--all"],
             "stop": ["stop"],
             "up": ["up", "-d", "--no-build", "--wait", "--wait-timeout", "180"],
