@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import io
 import json
 import re
 import zipfile
@@ -110,6 +111,7 @@ def _verify_source_material(
     bank_dir: Path,
     output_hash_cache: dict[str, str],
     output_bytes_cache: dict[str, bytes],
+    source_document_cache: dict[str, tuple[bytes, str]],
     source_zip_cache: dict[str, tuple[zipfile.ZipFile, set[str], dict[str, bytes]]],
 ) -> tuple[list[SourceDocument], dict[str, str], list[str]]:
     reasons: list[str] = []
@@ -162,16 +164,23 @@ def _verify_source_material(
             reasons.append("source_document_copy_missing")
             continue
         copy_record, source_path = selected
-        digest = _sha256(source_path.read_bytes())
+        cache_key = str(source_path.resolve(strict=True))
+        cached_document = source_document_cache.get(cache_key)
+        if cached_document is None:
+            source_bytes = source_path.read_bytes()
+            cached_document = (source_bytes, _sha256(source_bytes))
+            source_document_cache[cache_key] = cached_document
+        source_bytes, digest = cached_document
+        # Check each record even when its bytes and digest came from this load's cache.
         if digest != doc.get("sha256") or digest != copy_record.get("sha256", doc.get("sha256")):
             reasons.append("source_document_hash_mismatch")
             continue
         rel_path = copy_record.get("path")
         documents.append(SourceDocument(id=doc_id, path=rel_path, sha256=digest))
         try:
-            if str(source_path) not in source_zip_cache:
-                zf = zipfile.ZipFile(source_path)
-                source_zip_cache[str(source_path)] = (zf, set(zf.namelist()), {})
+            if cache_key not in source_zip_cache:
+                zf = zipfile.ZipFile(io.BytesIO(source_bytes))
+                source_zip_cache[cache_key] = (zf, set(zf.namelist()), {})
         except (OSError, zipfile.BadZipFile):
             reasons.append("source_document_invalid")
 
@@ -189,7 +198,7 @@ def _verify_source_material(
         if doc_id not in source_paths:
             continue
         source_path = source_paths[doc_id]
-        cache_key = str(source_path)
+        cache_key = str(source_path.resolve(strict=True))
         cached = source_zip_cache.get(cache_key)
         if cached is None:
             reasons.append("source_document_invalid")
@@ -486,112 +495,115 @@ def load_practice_bank(bank_dir: Path, semantic_dir: Path) -> PracticeBank:
 
     output_hash_cache: dict[str, str] = {}
     output_bytes_cache: dict[str, bytes] = {}
+    source_document_cache: dict[str, tuple[bytes, str]] = {}
     source_zip_cache: dict[str, tuple[zipfile.ZipFile, set[str], dict[str, bytes]]] = {}
     semantic_call_cache: dict[
         tuple[str, int, str | None, str | None, str | None],
         tuple[dict[str, Any] | None, str | None],
     ] = {}
     practice_questions: list[BankQuestion] = []
-    for position, source_question in enumerate(raw_questions):
-        qid = source_question["id"]
-        annotation = annotations.get(qid)
-        reasons: list[str] = []
-        if source_question.get("structure_status") != "imported":
-            reasons.append("source_structure_incomplete")
-        if source_question.get("association_status") != "confirmed":
-            reasons.append("source_association_unconfirmed")
-        if source_question.get("answer_available") is not True:
-            reasons.append("source_answer_missing")
-        fingerprint = source_question.get("content_fingerprint")
-        if not isinstance(fingerprint, str) or not _HEX_256.fullmatch(fingerprint):
-            reasons.append("source_fingerprint_missing_or_invalid")
+    try:
+        for position, source_question in enumerate(raw_questions):
+            qid = source_question["id"]
+            annotation = annotations.get(qid)
+            reasons: list[str] = []
+            if source_question.get("structure_status") != "imported":
+                reasons.append("source_structure_incomplete")
+            if source_question.get("association_status") != "confirmed":
+                reasons.append("source_association_unconfirmed")
+            if source_question.get("answer_available") is not True:
+                reasons.append("source_answer_missing")
+            fingerprint = source_question.get("content_fingerprint")
+            if not isinstance(fingerprint, str) or not _HEX_256.fullmatch(fingerprint):
+                reasons.append("source_fingerprint_missing_or_invalid")
 
-        documents, asset_hashes, source_reasons = _verify_source_material(
-            source_question,
-            docs_by_id,
-            bank_root,
-            output_hash_cache,
-            output_bytes_cache,
-            source_zip_cache,
-        )
-        reasons.extend(source_reasons)
-        semantic_reasons, assessment = _annotation_reasons(
-            source_question,
-            annotation,
-            curriculum,
-            curriculum_sha,
-            curriculum_index,
-            semantic_root,
-            source_sha,
-            semantic_call_cache,
-        )
-        reasons.extend(semantic_reasons)
-        reasons = sorted(set(reasons))
-
-        point_ids = list(assessment.point_ids) if assessment else []
-        prerequisite_ids = list(assessment.prerequisite_ids) if assessment else []
-        score = assessment.difficulty_score if assessment else None
-        source_hash = canonical_hash(source_question)
-        semantic_hash = canonical_hash(annotation)
-        revision = canonical_hash({"source_hash": source_hash, "semantic_hash": semantic_hash})
-        row_fingerprint = (
-            fingerprint
-            if isinstance(fingerprint, str) and _HEX_256.fullmatch(fingerprint)
-            else None
-        )
-        status = "eligible" if not reasons else "blocked"
-        # Failed provenance and source rows remain visible; never silently discard them.
-        try:
-            practice_questions.append(
-                BankQuestion(
-                    id=qid,
-                    revision=revision,
-                    canonical_id=_canonical_id(source_question, position),
-                    content_fingerprint=row_fingerprint,
-                    curriculum_version=curriculum.version,
-                    difficulty_version=DIFFICULTY_VERSION,
-                    point_ids=point_ids,
-                    prerequisite_ids=prerequisite_ids,
-                    difficulty_score=score,
-                    status=status,
-                    block_reasons=reasons,
-                    source_hash=source_hash,
-                    semantic_hash=semantic_hash,
-                    source_payload=copy.deepcopy(source_question),
-                    semantic_payload=copy.deepcopy(annotation),
-                    documents=documents,
-                    asset_hashes=asset_hashes,
-                )
+            documents, asset_hashes, source_reasons = _verify_source_material(
+                source_question,
+                docs_by_id,
+                bank_root,
+                output_hash_cache,
+                output_bytes_cache,
+                source_document_cache,
+                source_zip_cache,
             )
-        except (ValidationError, ValueError):
-            # Contract validation is an additional gate. Preserve row and diagnostic reason.
-            practice_questions.append(
-                BankQuestion(
-                    id=qid,
-                    revision=revision,
-                    canonical_id=_canonical_id(source_question, position),
-                    content_fingerprint=row_fingerprint,
-                    curriculum_version=curriculum.version,
-                    difficulty_version=DIFFICULTY_VERSION,
-                    point_ids=point_ids,
-                    prerequisite_ids=prerequisite_ids,
-                    difficulty_score=score,
-                    status="blocked",
-                    block_reasons=sorted(set([*reasons, "practice_contract_validation_failed"])),
-                    source_hash=source_hash,
-                    semantic_hash=semantic_hash,
-                    source_payload=copy.deepcopy(source_question),
-                    semantic_payload=copy.deepcopy(annotation),
-                    documents=documents,
-                    asset_hashes=asset_hashes,
-                )
+            reasons.extend(source_reasons)
+            semantic_reasons, assessment = _annotation_reasons(
+                source_question,
+                annotation,
+                curriculum,
+                curriculum_sha,
+                curriculum_index,
+                semantic_root,
+                source_sha,
+                semantic_call_cache,
             )
+            reasons.extend(semantic_reasons)
+            reasons = sorted(set(reasons))
 
-    for zf, _, _ in source_zip_cache.values():
-        try:
-            zf.close()
-        except Exception:
-            pass
+            point_ids = list(assessment.point_ids) if assessment else []
+            prerequisite_ids = list(assessment.prerequisite_ids) if assessment else []
+            score = assessment.difficulty_score if assessment else None
+            source_hash = canonical_hash(source_question)
+            semantic_hash = canonical_hash(annotation)
+            revision = canonical_hash({"source_hash": source_hash, "semantic_hash": semantic_hash})
+            row_fingerprint = (
+                fingerprint
+                if isinstance(fingerprint, str) and _HEX_256.fullmatch(fingerprint)
+                else None
+            )
+            status = "eligible" if not reasons else "blocked"
+            # Failed provenance and source rows remain visible; never silently discard them.
+            try:
+                practice_questions.append(
+                    BankQuestion(
+                        id=qid,
+                        revision=revision,
+                        canonical_id=_canonical_id(source_question, position),
+                        content_fingerprint=row_fingerprint,
+                        curriculum_version=curriculum.version,
+                        difficulty_version=DIFFICULTY_VERSION,
+                        point_ids=point_ids,
+                        prerequisite_ids=prerequisite_ids,
+                        difficulty_score=score,
+                        status=status,
+                        block_reasons=reasons,
+                        source_hash=source_hash,
+                        semantic_hash=semantic_hash,
+                        source_payload=copy.deepcopy(source_question),
+                        semantic_payload=copy.deepcopy(annotation),
+                        documents=documents,
+                        asset_hashes=asset_hashes,
+                    )
+                )
+            except (ValidationError, ValueError):
+                # Contract validation is an additional gate. Preserve row and diagnostic reason.
+                practice_questions.append(
+                    BankQuestion(
+                        id=qid,
+                        revision=revision,
+                        canonical_id=_canonical_id(source_question, position),
+                        content_fingerprint=row_fingerprint,
+                        curriculum_version=curriculum.version,
+                        difficulty_version=DIFFICULTY_VERSION,
+                        point_ids=point_ids,
+                        prerequisite_ids=prerequisite_ids,
+                        difficulty_score=score,
+                        status="blocked",
+                        block_reasons=sorted(set([*reasons, "practice_contract_validation_failed"])),
+                        source_hash=source_hash,
+                        semantic_hash=semantic_hash,
+                        source_payload=copy.deepcopy(source_question),
+                        semantic_payload=copy.deepcopy(annotation),
+                        documents=documents,
+                        asset_hashes=asset_hashes,
+                    )
+                )
+    finally:
+        for zf, _, _ in source_zip_cache.values():
+            try:
+                zf.close()
+            except Exception:
+                pass
 
     return PracticeBank(
         source_bank_sha256=source_sha,

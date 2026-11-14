@@ -101,7 +101,7 @@ def install_bank_routes(app, store, settings, admin_identity, write_admin_identi
     def check(payload: _Input, identity=Depends(write_admin_identity)):
         if bank.state(store)["revision"] != payload.expected_revision:
             raise StoreConflict("题库已更新，请刷新后重试")
-        return bank.summary(store, settings, requester_id=identity["user"]["id"])
+        return bank.summary(store, settings, requester_id=identity["user"]["id"], force=True)
 
     @app.post("/api/admin/bank/restore")
     def restore(payload: _Restore, identity=Depends(write_admin_identity)):

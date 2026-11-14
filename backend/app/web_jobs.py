@@ -15,7 +15,8 @@ import threading
 import traceback
 from pathlib import Path
 
-from app.bank_practice import build_bank_practice, load_practice_bank
+from app.bank_cache import load_cached_practice_bank
+from app.bank_practice import build_bank_practice
 from app.contracts import Curriculum, PracticeRequest, StudentProgress
 from app.curriculum import CurriculumIndex
 from app.exam_contracts import ExamAnalysis, ExamCorrection, ExamModelResponse
@@ -66,7 +67,7 @@ def _bank(settings, store=None):
         return load_bank(store, settings)
     if settings.bank_dir is None or settings.semantic_dir is None:
         raise JobInputError("尚未配置可组卷题库，请由管理员设置题库与语义目录")
-    bank = load_practice_bank(settings.bank_dir, settings.semantic_dir)
+    bank = load_cached_practice_bank(settings.bank_dir, settings.semantic_dir)
     if bank.curriculum_version != _curriculum(settings).version:
         raise JobInputError("题库与学生考点目录版本不同")
     return bank

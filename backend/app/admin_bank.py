@@ -9,11 +9,12 @@ import json
 from collections import Counter
 from dataclasses import replace
 from datetime import UTC, datetime
+from functools import lru_cache
 from pathlib import Path, PurePosixPath
 
 from lxml import html
 
-from app.bank_practice import load_practice_bank
+from app.bank_cache import load_cached_practice_bank
 from app.bank_practice_contracts import AdminBankAdjustment, BankQuestion
 from app.bank_view import _safe_fragment
 from app.contracts import Curriculum
@@ -68,19 +69,21 @@ def effective_settings(store, settings, *, snapshot=None):
     return replace(settings, bank_dir=root / "source", semantic_dir=root / "semantic")
 
 
-def load_bank(store, settings, *, snapshot=None):
+def load_bank(store, settings, *, snapshot=None, force=False):
     snapshot = snapshot or state(store)
     active = effective_settings(store, settings, snapshot=snapshot)
     if active.bank_dir is None or active.semantic_dir is None:
         raise BankError("尚未配置题库，请上传Word原卷与解析")
     try:
-        bank = load_practice_bank(active.bank_dir, active.semantic_dir)
+        bank = load_cached_practice_bank(active.bank_dir, active.semantic_dir, force=force)
         curriculum = Curriculum.model_validate_json(settings.curriculum_path.read_bytes())
         if bank.curriculum_snapshot != curriculum:
             raise BankError("题库与当前教学考点目录不一致")
         index = CurriculumIndex(curriculum)
         adjusted = []
         overrides = snapshot["data"].get("adjustments", {})
+        if not overrides:
+            return bank
         for question in bank.questions:
             value = overrides.get(question.id)
             if value is None:
@@ -106,29 +109,31 @@ def load_bank(store, settings, *, snapshot=None):
                     [*question.block_reasons, "admin_disabled"]
                 )))
             adjusted.append(BankQuestion.model_validate(raw))
-        raw_bank = bank.model_dump(mode="json")
-        raw_bank["questions"] = [q.model_dump(mode="json") for q in adjusted]
-        if overrides:
-            raw_bank["annotations_sha256"] = canonical_hash({
+        # Unchanged rows are already verified. Each changed row above passed its
+        # own contract; identities/order and curriculum are unchanged, preserving
+        # the bank-level uniqueness/curriculum invariants without revalidating all rows.
+        return bank.model_copy(update={
+            "questions": adjusted,
+            "annotations_sha256": canonical_hash({
                 "base": bank.annotations_sha256, "adjustments": overrides,
-            })
-        return type(bank).model_validate(raw_bank)
+            }),
+        })
     except BankError:
         raise
     except (OSError, ValueError, KeyError, TypeError):
         raise BankError("题库完整性检查未通过，请检查来源资料、模型证据及考点目录") from None
 
 
-def summary(store, settings, *, requester_id=None):
+def summary(store, settings, *, requester_id=None, force=False):
     row = state(store)
     active = effective_settings(store, settings, snapshot=row)
     configured = active.bank_dir is not None and active.semantic_dir is not None
-    bank = load_bank(store, settings, snapshot=row) if configured else None
+    bank = load_bank(store, settings, snapshot=row, force=force) if configured else None
     questions = bank.questions if bank else []
     reasons = Counter(reason for q in questions for reason in q.block_reasons)
     imports = []
     if requester_id:
-        for record in reversed(store.list_records("bank_import", requester_id)):
+        for record in reversed(store.list_records("bank_import", requester_id)[-30:]):
             jobs = store.list_jobs(requester_id, resource_id=record["id"])
             latest = jobs[-1] if jobs else None
             imports.append({
@@ -169,9 +174,23 @@ def question_summary(question, titles):
     }
 
 
-def source_titles(active):
-    raw = json.loads((active.bank_dir / "bank.json").read_bytes())
+def _title_signature(path):
+    value = path.stat()
+    return (value.st_dev, value.st_ino, value.st_mode, value.st_size,
+            value.st_mtime_ns, value.st_ctime_ns)
+
+
+@lru_cache(maxsize=8)
+def _source_titles(path, signature):
+    raw = json.loads(path.read_bytes())
+    if _title_signature(path) != signature:
+        raise BankError("题库在读取期间发生变化，请重新读取")
     return {p["id"]: p.get("title", "") for p in raw.get("pairs", [])}
+
+
+def source_titles(active):
+    path = (active.bank_dir / "bank.json").resolve(strict=True)
+    return dict(_source_titles(path, _title_signature(path)))
 
 
 def list_questions(store, settings, *, q="", status="all", point_id="", offset=0, limit=25):
@@ -315,7 +334,7 @@ def prepare_import_publication(store, settings, package_path, revision, actor, r
     ) else 0
     data = change_data(row, actor, reason, question_count=previous_count)
     data.update(package_path=package_path, adjustments={})
-    bank = load_bank(store, settings, snapshot={**row, "data": data})
+    bank = load_bank(store, settings, snapshot={**row, "data": data}, force=True)
     if not any(q.status == "eligible" for q in bank.questions):
         raise BankError("新题库无可用题目，当前版本保持不变")
     data["question_count"] = len(bank.questions)
@@ -335,6 +354,6 @@ def restore(store, settings, version, revision, actor, reason):
     data = change_data(row, actor, reason)
     data.update(package_path=previous["package_path"],
                 adjustments=copy.deepcopy(previous.get("adjustments", {})))
-    load_bank(store, settings, snapshot={**row, "data": data})
+    load_bank(store, settings, snapshot={**row, "data": data}, force=True)
     store.update_record("bank_state", STATE_ID, STATE_OWNER, data, row["revision"])
     return summary(store, settings, requester_id=actor)
