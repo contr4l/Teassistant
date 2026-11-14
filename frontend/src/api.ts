@@ -75,6 +75,7 @@ export type InventoryPoint = {
 export type PracticeFile = { id: string; label: string; url: string }
 
 export type Practice = {
+  job_id?: string | null
   id: string
   student_id: string
   status: string
@@ -95,6 +96,19 @@ export class ApiError extends Error {
 }
 
 let csrfToken = ''
+
+let clientIdSequence = 0
+
+/** Correlation IDs only; usable on LAN HTTP pages as well as secure origins. */
+export function newClientId(): string {
+  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID()
+  const bytes = new Uint8Array(16)
+  if (globalThis.crypto?.getRandomValues) {
+    globalThis.crypto.getRandomValues(bytes)
+    return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('')
+  }
+  return `client-${Date.now().toString(36)}-${++clientIdSequence}-${Math.random().toString(36).slice(2)}`
+}
 
 export function setCsrfToken(token: string) {
   csrfToken = token
@@ -205,15 +219,22 @@ export async function pollJob(
   signal?: AbortSignal,
 ): Promise<Job> {
   while (!signal?.aborted) {
-    const job = unwrap<Job>(await api<Job>(`/jobs/${encodeURIComponent(jobId)}`))
+    const job = unwrap<Job>(await api<Job>(`/jobs/${encodeURIComponent(jobId)}`, { signal }))
+    if (signal?.aborted) throw new DOMException('Aborted', 'AbortError')
     onUpdate(job)
     if (['completed', 'partial', 'failed'].includes(job.status)) return job
     await new Promise<void>((resolve, reject) => {
-      const timeout = window.setTimeout(resolve, 1300)
-      signal?.addEventListener('abort', () => {
+      const onAbort = () => {
         window.clearTimeout(timeout)
+        signal?.removeEventListener('abort', onAbort)
         reject(new DOMException('Aborted', 'AbortError'))
-      }, { once: true })
+      }
+      const timeout = window.setTimeout(() => {
+        signal?.removeEventListener('abort', onAbort)
+        resolve()
+      }, 1300)
+      signal?.addEventListener('abort', onAbort, { once: true })
+      if (signal?.aborted) onAbort()
     })
   }
   throw new DOMException('Aborted', 'AbortError')

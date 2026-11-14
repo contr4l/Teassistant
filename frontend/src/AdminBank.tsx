@@ -78,6 +78,9 @@ export default function AdminBank({ onNotice }: Props) {
   const [detail, setDetail] = useState<BankQuestionDetail | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
   const [draft, setDraft] = useState<Draft | null>(null)
+  const selectedIdRef = useRef('')
+  const detailRequestId = useRef(0)
+  const detailMounted = useRef(true)
   const [saving, setSaving] = useState(false)
   const [checking, setChecking] = useState(false)
   const [checkResult, setCheckResult] = useState<BankSummary | null>(null)
@@ -91,6 +94,24 @@ export default function AdminBank({ onNotice }: Props) {
   const pollers = useRef<Map<string, AbortController>>(new Map())
   const fileInput = useRef<HTMLInputElement>(null)
   const limit = 25
+
+  const selectQuestion = useCallback((id: string) => {
+    if (id === selectedIdRef.current) return
+    selectedIdRef.current = id
+    detailRequestId.current += 1
+    setSelectedId(id)
+    setDetail(null)
+    setDraft(null)
+    setDetailLoading(Boolean(id))
+  }, [])
+
+  useEffect(() => {
+    detailMounted.current = true
+    return () => {
+      detailMounted.current = false
+      detailRequestId.current += 1
+    }
+  }, [])
 
   const loadSummary = useCallback(async (quiet = false) => {
     if (quiet) setRefreshing(true); else setLoading(true)
@@ -121,17 +142,30 @@ export default function AdminBank({ onNotice }: Props) {
   }, [summary?.configured, summary?.revision, query, status, pointId, page, onNotice])
 
   const loadDetail = useCallback(async (id: string, quiet = false) => {
-    if (!id) return
+    if (!id || !detailMounted.current || selectedIdRef.current !== id) return
+    const requestId = ++detailRequestId.current
     if (!quiet) setDetailLoading(true)
     try {
       const next = await getBankQuestion(id)
-      setSelectedId(id); setDetail(next); setDraft(makeDraft(next))
-    } catch (error) { onNotice('error', `题目详情读取失败：${errorText(error)}`) }
-    finally { setDetailLoading(false) }
+      if (detailMounted.current && detailRequestId.current === requestId && selectedIdRef.current === id) {
+        setDetail(next)
+        setDraft(makeDraft(next))
+      }
+    } catch (error) {
+      if (detailMounted.current && detailRequestId.current === requestId && selectedIdRef.current === id) {
+        onNotice('error', `题目详情读取失败：${errorText(error)}`)
+      }
+    } finally {
+      if (detailMounted.current && detailRequestId.current === requestId && selectedIdRef.current === id) setDetailLoading(false)
+    }
   }, [onNotice])
 
   useEffect(() => {
-    if (!selectedId || !summary?.configured) { setDetail(null); setDraft(null); return }
+    if (!selectedId || !summary?.configured) {
+      detailRequestId.current += 1
+      setDetail(null); setDraft(null); setDetailLoading(false)
+      return
+    }
     void loadDetail(selectedId)
   }, [selectedId, summary?.revision, summary?.configured, loadDetail])
 
@@ -184,13 +218,14 @@ export default function AdminBank({ onNotice }: Props) {
         expected_revision: summary.revision, enabled: draft.enabled, point_ids: draft.point_ids,
         prerequisite_ids: draft.prerequisite_ids, difficulty_score: score, reason: draft.reason.trim(), note: draft.note,
       })
-      setDetail(updated); setDraft(makeDraft(updated)); await loadSummary(true)
+      if (selectedIdRef.current === detail.id) { setDetail(updated); setDraft(makeDraft(updated)) }
+      await loadSummary(true)
       onNotice('success', '管理员调整已保存，原 AI assessment 与调整记录分别保留')
     } catch (error) {
       if (error instanceof ApiError && error.status === 409) onNotice('error', '题库版本已变化，已重新读取最新版本；请核对后再次提交')
       else onNotice('error', `调整未保存：${errorText(error)}`)
       await loadSummary(true).catch(() => undefined)
-      if (detail) await loadDetail(detail.id, true)
+      if (detail && detailMounted.current && selectedIdRef.current === detail.id) await loadDetail(detail.id, true)
     } finally { setSaving(false) }
   }
 
@@ -243,7 +278,7 @@ export default function AdminBank({ onNotice }: Props) {
     setRestoring(true)
     try {
       const restored = await restoreBank({ expected_revision: summary.revision, version: restoreTarget, reason: restoreReason.trim() })
-      setSummary(restored); setRestoreTarget(''); setRestoreReason(''); setSelectedId('')
+      setSummary(restored); setRestoreTarget(''); setRestoreReason(''); selectQuestion('')
       onNotice('success', '已恢复该保留版本；来源和历史未覆盖，恢复版本仍执行现有门禁')
     } catch (error) {
       if (error instanceof ApiError && error.status === 409) onNotice('error', '题库版本已变化，请刷新后重新选择恢复目标')
@@ -284,7 +319,7 @@ export default function AdminBank({ onNotice }: Props) {
       <section className="bank-question-list panel">
         <div className="section-heading"><div><h2>题目库存</h2><p>{total.toLocaleString('zh-CN')} 道 · 每页 {limit} 道</p></div><button className="button button-secondary button-sm" onClick={() => void runCheck()} disabled={checking}><ShieldCheck size={15} />{checking ? '校验中…' : '全库校验'}</button></div>
         <div className="bank-filters"><label className="bank-search"><Search size={16} /><input aria-label="搜索题目" value={query} onChange={(event) => { setQuery(event.target.value); setPage(0) }} placeholder="搜索题号或题目内容" /></label><select aria-label="状态过滤" value={status} onChange={(event) => { setStatus(event.target.value as StatusFilter); setPage(0) }}><option value="all">全部状态</option><option value="eligible">可组卷</option><option value="blocked">受阻</option><option value="disabled">已停用</option></select><select aria-label="考点过滤" value={pointId} onChange={(event) => { setPointId(event.target.value); setPage(0) }}><option value="">全部考点</option>{summary.points.map((point) => <option value={point.id} key={point.id}>{point.name}</option>)}</select></div>
-        {listLoading ? <div className="bank-list-loading"><LoaderCircle className="spin" size={18} />正在读取题目…</div> : rows.length === 0 ? <div className="bank-list-empty"><FileCheck2 size={22} /><b>没有符合条件的题目</b><span>{query || status !== 'all' || pointId ? '调整搜索或筛选条件后重试。' : '当前题库没有题目。'}</span></div> : <div className="bank-rows">{rows.map((row) => { const [label, tone] = questionStatus(row); return <button className={`bank-question-row ${selectedId === row.id ? 'selected' : ''}`} key={row.id} onClick={() => setSelectedId(row.id)}><span className={`bank-status ${tone}`}>{label}</span><b>{row.number || '未编号'} · {row.title || '未命名题目'}</b><small>{row.point_ids.map((id) => summary.points.find((point) => point.id === id)?.name ?? id).join('、') || '未标注考点'}{row.difficulty_score != null ? ` · 难度 ${row.difficulty_score}` : ' · 难度未设置'}</small>{row.block_reasons.length > 0 && <small className="bank-block-reason">{row.block_reasons.map(blockReason).join('；')}</small>}</button> })}</div>}
+        {listLoading ? <div className="bank-list-loading"><LoaderCircle className="spin" size={18} />正在读取题目…</div> : rows.length === 0 ? <div className="bank-list-empty"><FileCheck2 size={22} /><b>没有符合条件的题目</b><span>{query || status !== 'all' || pointId ? '调整搜索或筛选条件后重试。' : '当前题库没有题目。'}</span></div> : <div className="bank-rows">{rows.map((row) => { const [label, tone] = questionStatus(row); return <button className={`bank-question-row ${selectedId === row.id ? 'selected' : ''}`} key={row.id} onClick={() => selectQuestion(row.id)}><span className={`bank-status ${tone}`}>{label}</span><b>{row.number || '未编号'} · {row.title || '未命名题目'}</b><small>{row.point_ids.map((id) => summary.points.find((point) => point.id === id)?.name ?? id).join('、') || '未标注考点'}{row.difficulty_score != null ? ` · 难度 ${row.difficulty_score}` : ' · 难度未设置'}</small>{row.block_reasons.length > 0 && <small className="bank-block-reason">{row.block_reasons.map(blockReason).join('；')}</small>}</button> })}</div>}
         <div className="bank-pagination"><span>{total ? `${page + 1} / ${pageCount} 页` : '0 条结果'}</span><button className="button button-quiet button-sm" onClick={() => setPage((current) => Math.max(0, current - 1))} disabled={page <= 0 || listLoading}><ChevronLeft size={15} />上一页</button><button className="button button-quiet button-sm" onClick={() => setPage((current) => Math.min(pageCount - 1, current + 1))} disabled={page + 1 >= pageCount || listLoading}>下一页<ChevronRight size={15} /></button></div>
       </section>
 
